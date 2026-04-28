@@ -3,7 +3,7 @@ import React, {createContext, useCallback, useContext, useEffect, useMemo, useSt
 import {toast} from '../utils/toast';
 import {detectInstalledUpiApps} from '../services/upiApps';
 import {storage} from '../services/storage';
-import {syncTransactionToBackend} from '../services/sync';
+import {patchTransactionOnBackend, syncTransactionToBackend} from '../services/sync';
 import {LocationPoint, OnboardingProfile, Receipt, Transaction, UpiApp} from '../types';
 import {randomRef} from '../utils/upi';
 
@@ -50,19 +50,22 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     await storage.saveTransactions(items);
   }, []);
 
-  const syncSingleIfOnline = useCallback(async (tx: Transaction) => {
-    const net = await NetInfo.fetch();
-    if (!net.isConnected) {
-      return tx;
-    }
-    const response = await syncTransactionToBackend(tx);
-    if (!response.ok) {
-      return tx;
-    }
-    const updated = {...tx, syncStatus: 'synced' as const};
-    setSyncMessage(`Synced transaction ${updated.id}`);
-    return updated;
-  }, []);
+  const syncSingleIfOnline = useCallback(
+    async (tx: Transaction) => {
+      const net = await NetInfo.fetch();
+      if (!net.isConnected) {
+        return tx;
+      }
+      const response = await syncTransactionToBackend(tx, profile);
+      if (!response.ok) {
+        return tx;
+      }
+      const updated = {...tx, syncStatus: 'synced' as const};
+      setSyncMessage(`Synced transaction ${updated.id}`);
+      return updated;
+    },
+    [profile],
+  );
 
   const flushQueued = useCallback(async () => {
     const net = await NetInfo.fetch();
@@ -174,8 +177,15 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
         return {...item, status: 'Abandoned' as const};
       });
       await saveTransactions(next);
+      const updatedTx = next.find(item => item.id === id);
+      if (updatedTx && profile) {
+        const net = await NetInfo.fetch();
+        if (net.isConnected) {
+          void syncTransactionToBackend(updatedTx, profile).catch(() => null);
+        }
+      }
     },
-    [saveTransactions, transactions],
+    [profile, saveTransactions, transactions],
   );
 
   const submitForReimbursement = useCallback(
@@ -192,8 +202,23 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       );
       await saveTransactions(next);
       setSyncMessage('Reimbursement submitted. You will be notified on approval.');
+      if (profile) {
+        const net = await NetInfo.fetch();
+        if (net.isConnected) {
+          void patchTransactionOnBackend(
+            id,
+            {
+              employeeId: profile.employeeId,
+              status: 'Pending Approval',
+              reimbursementPurpose: purpose,
+              reimbursementNote: note,
+            },
+            profile,
+          ).catch(() => null);
+        }
+      }
     },
-    [saveTransactions, transactions],
+    [profile, saveTransactions, transactions],
   );
 
   const addReceipts = useCallback(
@@ -208,8 +233,19 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
         };
       });
       await saveTransactions(next);
+      const updated = next.find(item => item.id === id);
+      if (updated && profile) {
+        const net = await NetInfo.fetch();
+        if (net.isConnected) {
+          void patchTransactionOnBackend(
+            id,
+            {employeeId: profile.employeeId, receipts: updated.receipts},
+            profile,
+          ).catch(() => null);
+        }
+      }
     },
-    [saveTransactions, transactions],
+    [profile, saveTransactions, transactions],
   );
 
   const setDefaultUpiApp = useCallback(async (id: string) => {
