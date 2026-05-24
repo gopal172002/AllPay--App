@@ -21,7 +21,7 @@ import {
 import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
 import {Receipt} from '../types';
-import {toast} from '../utils/toast';
+import {isPaymentCaptured} from '../services/payments';
 
 type Route = RouteProp<RootStackParamList, 'TransactionDetail'>;
 
@@ -64,7 +64,9 @@ export const TransactionDetailScreen = () => {
   }
 
   const canAttach = isWithin48Hours(tx.timestamp) && tx.receipts.length < 3;
-  const canSubmit = tx.status === 'Recorded' || tx.status === 'Flagged';
+  const paymentReady = isPaymentCaptured(tx.paymentStatus);
+  const canSubmit =
+    paymentReady && (tx.status === 'Recorded' || tx.status === 'Flagged');
 
   const attachFromSource = async (source: 'camera' | 'gallery') => {
     const pickerResult =
@@ -108,6 +110,9 @@ export const TransactionDetailScreen = () => {
           <Text style={styles.row}>Merchant: {tx.merchant.name}</Text>
           <Text style={styles.row}>MCC: {tx.merchant.mcc}</Text>
           <Text style={styles.row}>UPI Ref ID: {tx.upiRefId ?? '--'}</Text>
+          <Text style={styles.row}>
+            Payment: {tx.paymentStatus ?? 'not started'}
+          </Text>
           <Text style={styles.row}>Amount: INR {tx.amount.toFixed(2)}</Text>
           <Text style={styles.row}>UPI App: {tx.upiApp}</Text>
           <Text style={styles.row}>Sync: {tx.syncStatus}</Text>

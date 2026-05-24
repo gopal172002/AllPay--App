@@ -1,3 +1,13 @@
+export type PaymentStatus =
+  | 'draft'
+  | 'order_created'
+  | 'checkout_opened'
+  | 'payment_processing'
+  | 'payment_captured'
+  | 'payment_failed'
+  | 'payment_abandoned'
+  | 'legacy_simulated';
+
 export type TransactionStatus =
   | 'Recorded'
   | 'Pending Approval'
@@ -58,6 +68,14 @@ export type Transaction = {
   warningAcknowledged?: boolean;
   receipts: Receipt[];
   location: LocationPoint;
+  paymentStatus?: PaymentStatus;
+  razorpayOrderId?: string;
+  razorpayPaymentId?: string;
+  orderAmountPaise?: number;
+  capturedAmountPaise?: number;
+  paymentMethod?: string;
+  paymentFailedReason?: string;
+  paymentConfirmedAt?: string;
 };
 
 export type OnboardingProfile = {

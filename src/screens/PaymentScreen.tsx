@@ -13,6 +13,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import RazorpayCheckout from 'react-native-razorpay';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -25,8 +26,16 @@ import {
 import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
 import {LocationPoint, UpiApp} from '../types';
-import {buildUpiPaymentLink, getPolicyWarning, randomRef} from '../utils/upi';
+import {getPolicyWarning, randomRef} from '../utils/upi';
 import {toast} from '../utils/toast';
+import {
+  USE_RAZORPAY_UPI,
+  confirmPaymentOnBackend,
+  createPaymentOrder,
+  isTerminalPaymentStatus,
+  markCheckoutOpened,
+  pollPaymentStatus,
+} from '../services/payments';
 
 const GOOGLE_PAY_PLAY =
   'https://play.google.com/store/apps/details?id=com.google.android.apps.nbu.paisa.user';
@@ -68,25 +77,32 @@ const requestLocation = async (): Promise<LocationPoint> => {
   });
 };
 
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
+
 export const PaymentScreen = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   const {merchant} = route.params;
   const {
+    profile,
     installedUpiApps,
     defaultUpiAppId,
     setDefaultUpiApp,
     addTransaction,
     setTransactionResult,
+    updateTransactionPayment,
     locationEnabled,
   } = useAppData();
 
+  const qrLockedAmount = merchant.amount;
   const [amount, setAmount] = useState(
     merchant.amount ? merchant.amount.toFixed(2) : '',
   );
   const [selectedAppId, setSelectedAppId] = useState<string | null>(
     defaultUpiAppId ?? (installedUpiApps[0]?.id ?? null),
   );
+  const [paying, setPaying] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const selectedApp = useMemo<UpiApp | undefined>(
     () => installedUpiApps.find(item => item.id === selectedAppId),
@@ -120,6 +136,107 @@ export const PaymentScreen = () => {
     ]);
   };
 
+  const pollUntilTerminal = async (txId: string) => {
+    for (let attempt = 0; attempt < 30; attempt += 1) {
+      const statusRes = await pollPaymentStatus(txId);
+      if (statusRes.ok && statusRes.paymentStatus && isTerminalPaymentStatus(statusRes.paymentStatus)) {
+        return statusRes.paymentStatus;
+      }
+      await sleep(2000);
+    }
+    return undefined;
+  };
+
+  const payWithRazorpay = async (txId: string, parsedAmount: number, selectedAppName: string) => {
+    if (!profile) {
+      return;
+    }
+    setStatusMessage('Creating payment order…');
+    const orderRes = await createPaymentOrder({
+      txId,
+      amount: parsedAmount,
+      employeeId: profile.employeeId,
+      employeeName: profile.employeeName,
+      department: profile.department,
+      merchant,
+      upiApp: selectedAppName,
+    });
+    if (!orderRes.ok || !orderRes.orderId || !orderRes.keyId) {
+      toast.error('Payment unavailable', orderRes.message ?? 'Could not create Razorpay order.');
+      await updateTransactionPayment(txId, {
+        paymentStatus: 'payment_failed',
+        status: 'Abandoned',
+      });
+      return;
+    }
+
+    await updateTransactionPayment(txId, {
+      paymentStatus: 'order_created',
+      razorpayOrderId: orderRes.orderId,
+      status: 'Recorded',
+    });
+
+    await markCheckoutOpened(txId);
+    setStatusMessage('Opening UPI app…');
+
+    try {
+      const checkoutData = await RazorpayCheckout.open({
+        key: orderRes.keyId,
+        amount: String(orderRes.amount ?? Math.round(parsedAmount * 100)),
+        currency: orderRes.currency ?? 'INR',
+        name: profile.companyName,
+        description: `Payment to ${merchant.name}`,
+        order_id: orderRes.orderId,
+        method: 'upi',
+        prefill: {
+          name: profile.employeeName,
+          contact: profile.mobile,
+        },
+        theme: {color: '#1d4ed8'},
+      });
+
+      setStatusMessage('Confirming payment…');
+      const confirmRes = await confirmPaymentOnBackend({
+        txId,
+        razorpay_order_id: checkoutData.razorpay_order_id,
+        razorpay_payment_id: checkoutData.razorpay_payment_id,
+        razorpay_signature: checkoutData.razorpay_signature,
+      });
+      if (!confirmRes.ok) {
+        toast.error('Confirmation failed', confirmRes.message ?? 'Could not verify payment.');
+      }
+
+      const finalStatus = (await pollUntilTerminal(txId)) ?? confirmRes.paymentStatus ?? 'payment_processing';
+      const captured = finalStatus === 'payment_captured';
+      await updateTransactionPayment(txId, {
+        paymentStatus: finalStatus,
+        razorpayOrderId: orderRes.orderId,
+        razorpayPaymentId: checkoutData.razorpay_payment_id,
+        upiRefId: checkoutData.razorpay_payment_id,
+        status: captured ? 'Recorded' : finalStatus === 'payment_failed' ? 'Abandoned' : 'Recorded',
+      });
+
+      if (captured) {
+        toast.success('Payment captured', 'Your UPI payment was confirmed.');
+      } else if (finalStatus === 'payment_failed') {
+        toast.error('Payment failed', 'Please try again.');
+      } else {
+        toast.info('Payment processing', 'We are still confirming your payment.');
+      }
+      navigation.replace('TransactionDetail', {transactionId: txId});
+    } catch (error: unknown) {
+      const message =
+        typeof error === 'object' && error !== null && 'description' in error
+          ? String((error as {description?: string}).description ?? 'Payment cancelled')
+          : 'Payment cancelled';
+      await updateTransactionPayment(txId, {
+        paymentStatus: 'payment_abandoned',
+        status: 'Abandoned',
+      });
+      toast.error('Payment cancelled', message);
+    }
+  };
+
   const doPayment = async () => {
     const parsedAmount = Number(amount);
     if (!amount || !numberPattern.test(amount)) {
@@ -137,24 +254,39 @@ export const PaymentScreen = () => {
 
     const warning = getPolicyWarning(parsedAmount, merchant.category);
     const continuePayment = async () => {
-      await setDefaultUpiApp(selectedApp.id);
-      const location = locationEnabled ? await requestLocation() : null;
-      const tx = await addTransaction({
-        merchant,
-        amount: parsedAmount,
-        upiAppName: selectedApp.name,
-        upiRefId: randomRef('UPI'),
-        policyWarning: warning ?? undefined,
-        warningAcknowledged: Boolean(warning),
-        location,
-      });
-      const link = buildUpiPaymentLink(merchant, parsedAmount);
-      try {
-        await Linking.openURL(link);
-      } catch {
-        toast.error('Handoff failed', 'Unable to open the selected UPI app.');
+      if (paying) {
+        return;
       }
-      chooseResult(tx.id);
+      setPaying(true);
+      try {
+        await setDefaultUpiApp(selectedApp.id);
+        const location = locationEnabled ? await requestLocation() : null;
+        const tx = await addTransaction({
+          merchant,
+          amount: parsedAmount,
+          upiAppName: selectedApp.name,
+          upiRefId: randomRef('UPI'),
+          policyWarning: warning ?? undefined,
+          warningAcknowledged: Boolean(warning),
+          location,
+        });
+
+        if (USE_RAZORPAY_UPI) {
+          await payWithRazorpay(tx.id, parsedAmount, selectedApp.name);
+          return;
+        }
+
+        const link = `upi://pay?pa=${encodeURIComponent(merchant.vpa)}&pn=${encodeURIComponent(merchant.name)}&am=${parsedAmount.toFixed(2)}&cu=INR`;
+        try {
+          await Linking.openURL(link);
+        } catch {
+          toast.error('Handoff failed', 'Unable to open the selected UPI app.');
+        }
+        chooseResult(tx.id);
+      } finally {
+        setPaying(false);
+        setStatusMessage(null);
+      }
     };
 
     if (parsedAmount > COMPANY_AMOUNT_LIMIT) {
@@ -179,8 +311,14 @@ export const PaymentScreen = () => {
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader
           title="Confirm Payment"
-          subtitle="Review merchant details and continue to your preferred UPI app."
+          subtitle={
+            USE_RAZORPAY_UPI
+              ? 'Pay via Razorpay UPI. Merchant QR details are recorded for reimbursement.'
+              : 'Review merchant details and continue to your preferred UPI app.'
+          }
         />
+
+        {statusMessage ? <Text style={styles.statusMessage}>{statusMessage}</Text> : null}
 
         <Section title="Merchant details">
           <FormInput value={merchant.name} editable={false} />
@@ -199,16 +337,24 @@ export const PaymentScreen = () => {
           <FormInput
             value={amount}
             onChangeText={text => {
+              if (qrLockedAmount !== undefined) {
+                return;
+              }
               if (numberPattern.test(text)) {
                 setAmount(text);
               }
             }}
+            editable={qrLockedAmount === undefined}
             keyboardType="decimal-pad"
             placeholder="Enter amount in INR"
           />
-          <Text style={styles.helpText}>
-            Company threshold warning: INR {COMPANY_AMOUNT_LIMIT}
-          </Text>
+          {qrLockedAmount !== undefined ? (
+            <Text style={styles.helpText}>Amount is fixed by the merchant QR.</Text>
+          ) : (
+            <Text style={styles.helpText}>
+              Company threshold warning: INR {COMPANY_AMOUNT_LIMIT}
+            </Text>
+          )}
         </Section>
 
         <Section title="Select UPI app">
@@ -251,7 +397,10 @@ export const PaymentScreen = () => {
           )}
         </Section>
 
-        <PrimaryButton label="Proceed to UPI app" onPress={doPayment} />
+        <PrimaryButton
+          label={USE_RAZORPAY_UPI ? 'Pay with Razorpay UPI' : 'Proceed to UPI app'}
+          onPress={doPayment}
+        />
       </ScrollView>
     </Screen>
   );
@@ -261,6 +410,11 @@ const styles = StyleSheet.create({
   container: {
     padding: 16,
     flexGrow: 1,
+  },
+  statusMessage: {
+    color: '#1d4ed8',
+    fontWeight: '600',
+    marginBottom: 8,
   },
   metaRow: {
     flexDirection: 'row',

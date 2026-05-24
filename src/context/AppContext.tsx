@@ -4,7 +4,8 @@ import {toast} from '../utils/toast';
 import {detectInstalledUpiApps} from '../services/upiApps';
 import {storage} from '../services/storage';
 import {patchTransactionOnBackend, syncTransactionToBackend} from '../services/sync';
-import {LocationPoint, OnboardingProfile, Receipt, Transaction, UpiApp} from '../types';
+import {isPaymentCaptured} from '../services/payments';
+import {LocationPoint, OnboardingProfile, PaymentStatus, Receipt, Transaction, UpiApp} from '../types';
 import {randomRef} from '../utils/upi';
 
 type RecordInput = {
@@ -27,6 +28,17 @@ type AppContextValue = {
   completeOnboarding: (profile: OnboardingProfile) => Promise<void>;
   addTransaction: (input: RecordInput) => Promise<Transaction>;
   setTransactionResult: (id: string, status: 'success' | 'failure' | 'pending') => Promise<void>;
+  updateTransactionPayment: (
+    id: string,
+    patch: Pick<
+      Transaction,
+      | 'paymentStatus'
+      | 'razorpayOrderId'
+      | 'razorpayPaymentId'
+      | 'upiRefId'
+      | 'status'
+    >,
+  ) => Promise<void>;
   submitForReimbursement: (id: string, purpose: string, note: string) => Promise<void>;
   addReceipts: (id: string, receipts: Receipt[]) => Promise<void>;
   setDefaultUpiApp: (id: string) => Promise<void>;
@@ -145,6 +157,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
         location: input.location,
         policyWarning: input.policyWarning,
         warningAcknowledged: input.warningAcknowledged,
+        paymentStatus: 'draft' as PaymentStatus,
       };
       const net = await NetInfo.fetch();
       const maybeSynced =
@@ -188,8 +201,34 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     [profile, saveTransactions, transactions],
   );
 
+  const updateTransactionPayment = useCallback(
+    async (
+      id: string,
+      patch: Pick<
+        Transaction,
+        'paymentStatus' | 'razorpayOrderId' | 'razorpayPaymentId' | 'upiRefId' | 'status'
+      >,
+    ) => {
+      const next = transactions.map(item => (item.id === id ? {...item, ...patch} : item));
+      await saveTransactions(next);
+      const updatedTx = next.find(item => item.id === id);
+      if (updatedTx && profile) {
+        const net = await NetInfo.fetch();
+        if (net.isConnected) {
+          void syncTransactionToBackend(updatedTx, profile).catch(() => null);
+        }
+      }
+    },
+    [profile, saveTransactions, transactions],
+  );
+
   const submitForReimbursement = useCallback(
     async (id: string, purpose: string, note: string) => {
+      const current = transactions.find(item => item.id === id);
+      if (current && !isPaymentCaptured(current.paymentStatus)) {
+        toast.error('Payment required', 'Complete Razorpay payment before submitting for reimbursement.');
+        return;
+      }
       const next = transactions.map(item =>
         item.id === id
           ? {
@@ -287,6 +326,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       completeOnboarding,
       addTransaction,
       setTransactionResult,
+      updateTransactionPayment,
       submitForReimbursement,
       addReceipts,
       setDefaultUpiApp,
@@ -307,6 +347,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       setLocationCaptureEnabled,
       logout,
       setTransactionResult,
+      updateTransactionPayment,
       submitForReimbursement,
       syncMessage,
       transactions,
