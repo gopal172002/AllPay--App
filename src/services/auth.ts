@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {API_BASE, baseHeaders, MOBILE_SYNC_SECRET} from './apiConfig';
+import {API_BASE, baseHeaders, MOBILE_SYNC_SECRET_VALUE} from './apiConfig';
 
 const AUTH_TOKEN_KEY = 'allpay.employee.jwt';
 const AUTH_EMPLOYEE_KEY = 'allpay.employee.id';
@@ -45,8 +45,8 @@ export async function authHeaders(): Promise<Record<string, string>> {
   const headers = baseHeaders();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
-  } else if (MOBILE_SYNC_SECRET) {
-    headers['X-AllPay-Sync-Secret'] = MOBILE_SYNC_SECRET;
+  } else if (MOBILE_SYNC_SECRET_VALUE) {
+    headers['X-AllPay-Sync-Secret'] = MOBILE_SYNC_SECRET_VALUE;
   }
   return headers;
 }
