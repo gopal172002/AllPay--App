@@ -1,5 +1,6 @@
 import type {MerchantData, PaymentStatus, Transaction} from '../types';
-import {API_BASE, authHeaders} from './auth';
+import {API_BASE} from './apiConfig';
+import {authHeaders} from './auth';
 
 export type CreateOrderResponse = {
   ok: boolean;

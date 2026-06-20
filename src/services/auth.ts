@@ -1,27 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {Platform} from 'react-native';
+import {API_BASE, baseHeaders, MOBILE_SYNC_SECRET} from './apiConfig';
 
 const AUTH_TOKEN_KEY = 'allpay.employee.jwt';
 const AUTH_EMPLOYEE_KEY = 'allpay.employee.id';
 
-const API_BASE = Platform.select({
-  android: 'http://10.0.2.2:5000/api',
-  ios: 'http://localhost:5000/api',
-  default: 'http://localhost:5000/api',
-});
-
-const MOBILE_SYNC_SECRET = '';
-
-function baseHeaders(): Record<string, string> {
-  const h: Record<string, string> = {'Content-Type': 'application/json'};
-  if (MOBILE_SYNC_SECRET) {
-    h['X-AllPay-Sync-Secret'] = MOBILE_SYNC_SECRET;
-  }
-  return h;
-}
-
 export async function getEmployeeAuthToken(): Promise<string | null> {
   return AsyncStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+export async function saveEmployeeAuth(token: string, employeeId: string): Promise<void> {
+  await AsyncStorage.multiSet([
+    [AUTH_TOKEN_KEY, token],
+    [AUTH_EMPLOYEE_KEY, employeeId],
+  ]);
 }
 
 export async function clearEmployeeAuth(): Promise<void> {
@@ -42,8 +33,7 @@ export async function authenticateEmployee(
     if (!res.ok || !data.ok || !data.token) {
       return {ok: false};
     }
-    await AsyncStorage.setItem(AUTH_TOKEN_KEY, data.token);
-    await AsyncStorage.setItem(AUTH_EMPLOYEE_KEY, employeeId);
+    await saveEmployeeAuth(data.token, employeeId);
     return {ok: true, token: data.token};
   } catch {
     return {ok: false};
@@ -55,6 +45,8 @@ export async function authHeaders(): Promise<Record<string, string>> {
   const headers = baseHeaders();
   if (token) {
     headers.Authorization = `Bearer ${token}`;
+  } else if (MOBILE_SYNC_SECRET) {
+    headers['X-AllPay-Sync-Secret'] = MOBILE_SYNC_SECRET;
   }
   return headers;
 }

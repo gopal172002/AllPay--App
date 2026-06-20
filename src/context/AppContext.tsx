@@ -3,10 +3,12 @@ import React, {createContext, useCallback, useContext, useEffect, useMemo, useSt
 import {toast} from '../utils/toast';
 import {detectInstalledUpiApps} from '../services/upiApps';
 import {storage} from '../services/storage';
-import {patchTransactionOnBackend, syncTransactionToBackend} from '../services/sync';
+import {clearEmployeeAuth, saveEmployeeAuth} from '../services/auth';
+import {fetchActivePolicies, patchTransactionOnBackend, syncTransactionToBackend} from '../services/sync';
 import {isPaymentCaptured} from '../services/payments';
 import {LocationPoint, OnboardingProfile, PaymentStatus, Receipt, Transaction, UpiApp} from '../types';
 import {randomRef} from '../utils/upi';
+import type {ExpensePolicy} from '../utils/policies';
 
 type RecordInput = {
   merchant: Transaction['merchant'];
@@ -21,11 +23,13 @@ type RecordInput = {
 type AppContextValue = {
   profile: OnboardingProfile | null;
   transactions: Transaction[];
+  policies: ExpensePolicy[];
   installedUpiApps: UpiApp[];
   defaultUpiAppId: string | null;
   locationEnabled: boolean;
   syncMessage: string | null;
   completeOnboarding: (profile: OnboardingProfile) => Promise<void>;
+  finishEmployeeLogin: (profile: OnboardingProfile, token: string) => Promise<void>;
   addTransaction: (input: RecordInput) => Promise<Transaction>;
   setTransactionResult: (id: string, status: 'success' | 'failure' | 'pending') => Promise<void>;
   updateTransactionPayment: (
@@ -52,6 +56,7 @@ const AppContext = createContext<AppContextValue | undefined>(undefined);
 export const AppProvider = ({children}: {children: React.ReactNode}) => {
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [policies, setPolicies] = useState<ExpensePolicy[]>([]);
   const [installedUpiApps, setInstalledUpiApps] = useState<UpiApp[]>([]);
   const [defaultUpiAppId, setDefaultUpiAppId] = useState<string | null>(null);
   const [locationEnabled, setLocationEnabled] = useState(false);
@@ -111,6 +116,12 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       setTransactions(savedTxs);
       setDefaultUpiAppId(savedDefault);
       setLocationEnabled(savedLocation);
+      if (savedProfile?.employeeId) {
+        const policyRes = await fetchActivePolicies(savedProfile.employeeId);
+        if (policyRes.ok) {
+          setPolicies(policyRes.policies);
+        }
+      }
       const apps = await detectInstalledUpiApps();
       setInstalledUpiApps(apps);
       if (!savedDefault && apps.length === 1) {
@@ -135,6 +146,20 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
   const completeOnboarding = useCallback(async (nextProfile: OnboardingProfile) => {
     await storage.saveProfile(nextProfile);
     setProfile(nextProfile);
+    const policyRes = await fetchActivePolicies(nextProfile.employeeId);
+    if (policyRes.ok) {
+      setPolicies(policyRes.policies);
+    }
+  }, []);
+
+  const finishEmployeeLogin = useCallback(async (nextProfile: OnboardingProfile, token: string) => {
+    await saveEmployeeAuth(token, nextProfile.employeeId);
+    await storage.saveProfile(nextProfile);
+    setProfile(nextProfile);
+    const policyRes = await fetchActivePolicies(nextProfile.employeeId);
+    if (policyRes.ok) {
+      setPolicies(policyRes.policies);
+    }
   }, []);
 
   const addTransaction = useCallback(
@@ -307,9 +332,11 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
   }, []);
 
   const logout = useCallback(async () => {
+    await clearEmployeeAuth();
     await storage.clearSession();
     setProfile(null);
     setTransactions([]);
+    setPolicies([]);
     setDefaultUpiAppId(null);
     setLocationEnabled(false);
     setSyncMessage(null);
@@ -319,11 +346,13 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     () => ({
       profile,
       transactions,
+      policies,
       installedUpiApps,
       defaultUpiAppId,
       locationEnabled,
       syncMessage,
       completeOnboarding,
+      finishEmployeeLogin,
       addTransaction,
       setTransactionResult,
       updateTransactionPayment,
@@ -338,10 +367,12 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       addReceipts,
       addTransaction,
       completeOnboarding,
+      finishEmployeeLogin,
       defaultUpiAppId,
       installedUpiApps,
       locationEnabled,
       profile,
+      policies,
       refreshInstalledUpiApps,
       setDefaultUpiApp,
       setLocationCaptureEnabled,

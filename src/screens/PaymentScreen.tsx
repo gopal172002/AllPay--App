@@ -26,7 +26,8 @@ import {
 import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
 import {LocationPoint, UpiApp} from '../types';
-import {getPolicyWarning, randomRef} from '../utils/upi';
+import {getPolicyWarningFromPolicies} from '../utils/policies';
+import {randomRef} from '../utils/upi';
 import {toast} from '../utils/toast';
 import {
   USE_RAZORPAY_UPI,
@@ -85,6 +86,8 @@ export const PaymentScreen = () => {
   const {merchant} = route.params;
   const {
     profile,
+    policies,
+    transactions,
     installedUpiApps,
     defaultUpiAppId,
     setDefaultUpiApp,
@@ -252,7 +255,17 @@ export const PaymentScreen = () => {
       return;
     }
 
-    const warning = getPolicyWarning(parsedAmount, merchant.category);
+    const warning =
+      profile && policies.length
+        ? getPolicyWarningFromPolicies(
+            parsedAmount,
+            merchant.category,
+            profile.employeeId,
+            profile.department,
+            policies,
+            transactions,
+          )
+        : null;
     const continuePayment = async () => {
       if (paying) {
         return;
