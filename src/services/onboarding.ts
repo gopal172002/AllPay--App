@@ -68,39 +68,6 @@ export async function verifyInviteCode(inviteCode: string): Promise<
   }
 }
 
-export async function loginWithInviteCode(inviteCode: string): Promise<
-  | {ok: true; token: string; profile: BackendEmployeeProfile}
-  | ApiError
-> {
-  try {
-    const res = await fetch(`${API_BASE}/mobile/auth/login-invite`, {
-      method: 'POST',
-      headers: baseHeaders(),
-      body: JSON.stringify({inviteCode: inviteCode.trim()}),
-    });
-    const data = await parseJson<{
-      ok: boolean;
-      token?: string;
-      profile?: BackendEmployeeProfile;
-      needsOnboarding?: boolean;
-      message?: string;
-    }>(res);
-    if (!res.ok || !data.ok) {
-      return {
-        ok: false,
-        message: data.message || 'Login failed',
-        needsOnboarding: data.needsOnboarding,
-      };
-    }
-    if (!data.token || !data.profile) {
-      return {ok: false, message: 'Invalid server response'};
-    }
-    return {ok: true, token: data.token, profile: data.profile};
-  } catch {
-    return {ok: false, message: 'Cannot reach server. Check backend is running.'};
-  }
-}
-
 function onboardingHeaders(token: string): Record<string, string> {
   return {...baseHeaders(), Authorization: `Bearer ${token}`};
 }

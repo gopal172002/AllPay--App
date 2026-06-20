@@ -80,6 +80,15 @@ const requestLocation = async (): Promise<LocationPoint> => {
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
+const DetailRow = ({label, value}: {label: string; value: string}) => (
+  <View style={styles.detailRow}>
+    <Text style={styles.detailLabel}>{label}</Text>
+    <Text style={styles.detailValue} numberOfLines={2}>
+      {value}
+    </Text>
+  </View>
+);
+
 export const PaymentScreen = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
@@ -154,7 +163,7 @@ export const PaymentScreen = () => {
     if (!profile) {
       return;
     }
-    setStatusMessage('Creating payment order…');
+    setStatusMessage('Creating payment order...');
     const orderRes = await createPaymentOrder({
       txId,
       amount: parsedAmount,
@@ -180,7 +189,7 @@ export const PaymentScreen = () => {
     });
 
     await markCheckoutOpened(txId);
-    setStatusMessage('Opening UPI app…');
+    setStatusMessage('Opening UPI app...');
 
     try {
       const checkoutData = await RazorpayCheckout.open({
@@ -198,7 +207,7 @@ export const PaymentScreen = () => {
         theme: {color: '#1d4ed8'},
       });
 
-      setStatusMessage('Confirming payment…');
+      setStatusMessage('Confirming payment...');
       const confirmRes = await confirmPaymentOnBackend({
         txId,
         razorpay_order_id: checkoutData.razorpay_order_id,
@@ -319,6 +328,13 @@ export const PaymentScreen = () => {
     await continuePayment();
   };
 
+  let paymentButtonLabel = USE_RAZORPAY_UPI
+    ? 'Pay with Razorpay UPI'
+    : 'Proceed to UPI app';
+  if (paying) {
+    paymentButtonLabel = 'Processing payment';
+  }
+
   return (
     <Screen safeTop={false}>
       <ScrollView contentContainerStyle={styles.container}>
@@ -331,11 +347,15 @@ export const PaymentScreen = () => {
           }
         />
 
-        {statusMessage ? <Text style={styles.statusMessage}>{statusMessage}</Text> : null}
+        {statusMessage ? (
+          <View style={styles.statusBanner}>
+            <Text style={styles.statusMessage}>{statusMessage}</Text>
+          </View>
+        ) : null}
 
         <Section title="Merchant details">
-          <FormInput value={merchant.name} editable={false} />
-          <FormInput value={merchant.vpa} editable={false} />
+          <DetailRow label="Merchant" value={merchant.name} />
+          <DetailRow label="UPI ID" value={merchant.vpa} />
           <View style={styles.metaRow}>
             <View style={styles.metaPill}>
               <Text style={styles.metaLabel}>Category: {merchant.category}</Text>
@@ -411,8 +431,9 @@ export const PaymentScreen = () => {
         </Section>
 
         <PrimaryButton
-          label={USE_RAZORPAY_UPI ? 'Pay with Razorpay UPI' : 'Proceed to UPI app'}
+          label={paymentButtonLabel}
           onPress={doPayment}
+          disabled={paying}
         />
       </ScrollView>
     </Screen>
@@ -421,23 +442,52 @@ export const PaymentScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: 18,
+    paddingBottom: 24,
     flexGrow: 1,
   },
+  statusBanner: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#bfdbfe',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 12,
+  },
   statusMessage: {
-    color: '#1d4ed8',
-    fontWeight: '600',
-    marginBottom: 8,
+    color: '#1557d5',
+    fontWeight: '800',
+  },
+  detailRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef2f7',
+    paddingBottom: 10,
+    marginBottom: 10,
+  },
+  detailLabel: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 3,
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 21,
   },
   metaRow: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 8,
   },
   metaPill: {
     backgroundColor: '#f1f5f9',
-    borderColor: '#e2e8f0',
+    borderColor: '#dbe3ee',
     borderWidth: 1,
-    borderRadius: 999,
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 6,
   },
@@ -459,15 +509,15 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
+    borderColor: '#c7d2e1',
+    borderRadius: 8,
     padding: 12,
     marginBottom: 10,
     gap: 10,
     backgroundColor: '#ffffff',
   },
   appRowActive: {
-    borderColor: '#1d4ed8',
+    borderColor: '#1557d5',
     backgroundColor: '#eff6ff',
   },
   appLogo: {
@@ -488,7 +538,7 @@ const styles = StyleSheet.create({
   },
   appName: {
     color: '#0f172a',
-    fontWeight: '700',
+    fontWeight: '800',
   },
   appSub: {
     marginTop: 1,
@@ -508,6 +558,6 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: '#1d4ed8',
+    backgroundColor: '#1557d5',
   },
 });

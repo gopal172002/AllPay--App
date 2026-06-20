@@ -10,17 +10,17 @@ import {
 import {SafeAreaView} from 'react-native-safe-area-context';
 import type {Edge} from 'react-native-safe-area-context';
 
-const statusTone = (status: string): {bg: string; fg: string} => {
+const statusTone = (status: string): {bg: string; fg: string; border: string} => {
   if (status === 'Approved') {
-    return {bg: '#dcfce7', fg: '#166534'};
+    return {bg: '#ecfdf5', fg: '#047857', border: '#bbf7d0'};
   }
   if (status === 'Rejected' || status === 'Abandoned') {
-    return {bg: '#fee2e2', fg: '#991b1b'};
+    return {bg: '#fef2f2', fg: '#b91c1c', border: '#fecaca'};
   }
   if (status === 'Pending Approval' || status === 'Flagged') {
-    return {bg: '#fef3c7', fg: '#92400e'};
+    return {bg: '#fffbeb', fg: '#b45309', border: '#fde68a'};
   }
-  return {bg: '#dbeafe', fg: '#1d4ed8'};
+  return {bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe'};
 };
 
 type ScreenProps = {
@@ -88,6 +88,8 @@ export const PrimaryButton = ({
   disabled?: boolean;
 }) => (
   <Pressable
+    accessibilityRole="button"
+    android_ripple={disabled ? undefined : {color: '#1e40af'}}
     style={({pressed}) => [
       styles.button,
       pressed ? styles.buttonPressed : null,
@@ -95,84 +97,117 @@ export const PrimaryButton = ({
     ]}
     onPress={onPress}
     disabled={disabled}>
-    <Text style={styles.buttonText}>{label}</Text>
+    <Text style={styles.buttonText} numberOfLines={1}>
+      {label}
+    </Text>
   </Pressable>
 );
 
 export const SecondaryButton = ({
   label,
   onPress,
+  disabled,
 }: {
   label: string;
   onPress: () => void;
+  disabled?: boolean;
 }) => (
   <Pressable
+    accessibilityRole="button"
+    android_ripple={disabled ? undefined : {color: '#dbeafe'}}
     style={({pressed}) => [
       styles.secondaryButton,
       pressed ? styles.secondaryButtonPressed : null,
+      disabled ? styles.secondaryButtonDisabled : null,
     ]}
-    onPress={onPress}>
-    <Text style={styles.secondaryButtonText}>{label}</Text>
+    onPress={onPress}
+    disabled={disabled}>
+    <Text style={styles.secondaryButtonText} numberOfLines={1}>
+      {label}
+    </Text>
   </Pressable>
 );
 
-export const FormInput = (props: TextInputProps) => (
-  <TextInput
-    placeholderTextColor="#9ca3af"
-    style={[styles.input, props.editable === false ? styles.inputReadonly : null]}
-    {...props}
-  />
-);
+export const FormInput = (props: TextInputProps) => {
+  const {style, multiline, ...rest} = props;
+  return (
+    <TextInput
+      placeholderTextColor="#94a3b8"
+      multiline={multiline}
+      style={[
+        styles.input,
+        multiline ? styles.inputMultiline : null,
+        props.editable === false ? styles.inputReadonly : null,
+        style,
+      ]}
+      {...rest}
+    />
+  );
+};
 
-export const StatusPill = ({status}: {status: string}) => (
-  <View style={[styles.pill, {backgroundColor: statusTone(status).bg}]}>
-    <Text style={[styles.pillText, {color: statusTone(status).fg}]}>{status}</Text>
-  </View>
-);
+export const StatusPill = ({status}: {status: string}) => {
+  const tone = statusTone(status);
+  return (
+    <View
+      style={[
+        styles.pill,
+        {backgroundColor: tone.bg, borderColor: tone.border},
+      ]}>
+      <Text style={[styles.pillText, {color: tone.fg}]} numberOfLines={1}>
+        {status}
+      </Text>
+    </View>
+  );
+};
 
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f4f7fb',
   },
   headerWrap: {
-    marginBottom: 10,
+    marginBottom: 14,
   },
   headerTitle: {
     color: '#0f172a',
-    fontSize: 24,
+    fontSize: 25,
     fontWeight: '800',
-    letterSpacing: 0.2,
+    letterSpacing: 0,
+    lineHeight: 31,
   },
   headerSubtitle: {
     color: '#64748b',
-    marginTop: 2,
+    marginTop: 4,
     fontSize: 14,
+    lineHeight: 20,
   },
   section: {
     backgroundColor: '#ffffff',
     padding: 16,
-    borderRadius: 16,
-    marginBottom: 14,
+    borderRadius: 8,
+    marginBottom: 12,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#dbe3ee',
     shadowColor: '#0f172a',
-    shadowOpacity: 0.06,
-    shadowRadius: 10,
-    shadowOffset: {width: 0, height: 4},
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: {width: 0, height: 3},
     elevation: 2,
   },
   sectionTitle: {
     color: '#0f172a',
     fontSize: 16,
-    fontWeight: '700',
+    fontWeight: '800',
     marginBottom: 12,
   },
   button: {
-    backgroundColor: '#1d4ed8',
-    borderRadius: 12,
+    minHeight: 48,
+    backgroundColor: '#1557d5',
+    borderRadius: 8,
     paddingVertical: 13,
+    paddingHorizontal: 16,
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 10,
   },
   buttonPressed: {
@@ -183,30 +218,38 @@ const styles = StyleSheet.create({
   },
   buttonText: {
     color: '#ffffff',
-    fontWeight: '700',
+    fontWeight: '800',
     fontSize: 15,
+    flexShrink: 1,
   },
   secondaryButton: {
-    borderRadius: 12,
-    borderColor: '#1d4ed8',
+    minHeight: 46,
+    borderRadius: 8,
+    borderColor: '#8fb6ff',
     borderWidth: 1,
     paddingVertical: 12,
+    paddingHorizontal: 14,
     alignItems: 'center',
+    justifyContent: 'center',
     marginTop: 10,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#f8fbff',
   },
   secondaryButtonPressed: {
     backgroundColor: '#eff6ff',
   },
+  secondaryButtonDisabled: {
+    opacity: 0.45,
+  },
   secondaryButtonText: {
-    color: '#1d4ed8',
-    fontWeight: '700',
+    color: '#1557d5',
+    fontWeight: '800',
     fontSize: 15,
+    flexShrink: 1,
   },
   input: {
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
+    borderColor: '#c7d2e1',
+    borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 11,
     color: '#0f172a',
@@ -214,18 +257,24 @@ const styles = StyleSheet.create({
     marginBottom: 10,
     backgroundColor: '#ffffff',
   },
+  inputMultiline: {
+    minHeight: 88,
+    textAlignVertical: 'top',
+  },
   inputReadonly: {
-    backgroundColor: '#f1f5f9',
+    backgroundColor: '#f8fafc',
     color: '#64748b',
   },
   pill: {
     alignSelf: 'flex-start',
-    paddingHorizontal: 11,
+    borderWidth: 1,
+    paddingHorizontal: 10,
     paddingVertical: 5,
-    borderRadius: 20,
+    borderRadius: 999,
+    maxWidth: 148,
   },
   pillText: {
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
   },
 });

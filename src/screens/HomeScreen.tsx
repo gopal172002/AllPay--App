@@ -14,26 +14,33 @@ export const HomeScreen = () => {
   const latest = transactions.slice(0, 3);
   const totalPending = transactions.filter(item => item.status === 'Pending Approval').length;
   const totalRecorded = transactions.filter(item => item.status === 'Recorded').length;
+  const totalAmount = transactions.reduce((sum, item) => sum + item.amount, 0);
 
   return (
     <Screen safeBottom={false}>
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader
           title={`Hello, ${profile?.employeeName ?? 'Employee'}`}
-          subtitle={`Employee ID ${profile?.employeeId ?? '--'} • ${profile?.department ?? '--'}`}
+          subtitle={`Employee ID ${profile?.employeeId ?? '--'} | ${profile?.department ?? '--'}`}
         />
 
         <View style={styles.metricsRow}>
           <View style={styles.metricCard}>
-            <Text style={styles.metricValue}>{transactions.length}</Text>
-            <Text style={styles.metricLabel}>Total transactions</Text>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              INR {totalAmount.toFixed(0)}
+            </Text>
+            <Text style={styles.metricLabel}>Total spend</Text>
           </View>
           <View style={styles.metricCard}>
-            <Text style={styles.metricValue}>{totalRecorded}</Text>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              {totalRecorded}
+            </Text>
             <Text style={styles.metricLabel}>Recorded</Text>
           </View>
           <View style={styles.metricCard}>
-            <Text style={styles.metricValue}>{totalPending}</Text>
+            <Text style={styles.metricValue} numberOfLines={1}>
+              {totalPending}
+            </Text>
             <Text style={styles.metricLabel}>Pending approval</Text>
           </View>
         </View>
@@ -58,12 +65,17 @@ export const HomeScreen = () => {
             latest.map(item => (
               <View style={styles.row} key={item.id}>
                 <View style={styles.flexOne}>
-                  <Text style={styles.merchant}>{item.merchant.name}</Text>
+                  <Text style={styles.merchant} numberOfLines={1}>
+                    {item.merchant.name}
+                  </Text>
                   <Text style={styles.meta}>
-                    INR {item.amount.toFixed(2)} | {new Date(item.timestamp).toLocaleDateString()}
+                    {new Date(item.timestamp).toLocaleDateString()}
                   </Text>
                 </View>
-                <StatusPill status={item.status} />
+                <View style={styles.rowRight}>
+                  <Text style={styles.amount}>INR {item.amount.toFixed(2)}</Text>
+                  <StatusPill status={item.status} />
+                </View>
               </View>
             ))
           )}
@@ -75,26 +87,29 @@ export const HomeScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: 18,
+    paddingBottom: 24,
     flexGrow: 1,
   },
   metricsRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
     marginBottom: 14,
   },
   metricCard: {
     flex: 1,
     backgroundColor: '#ffffff',
-    borderRadius: 14,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    paddingVertical: 12,
+    borderColor: '#dbe3ee',
+    paddingVertical: 13,
     paddingHorizontal: 10,
+    minHeight: 82,
+    justifyContent: 'space-between',
   },
   metricValue: {
     color: '#0f172a',
-    fontSize: 20,
+    fontSize: 19,
     fontWeight: '800',
   },
   metricLabel: {
@@ -103,12 +118,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   syncBanner: {
-    backgroundColor: '#ecfdf3',
+    backgroundColor: '#ecfdf5',
     borderWidth: 1,
-    borderColor: '#86efac',
-    borderRadius: 12,
+    borderColor: '#bbf7d0',
+    borderRadius: 8,
     padding: 12,
-    marginBottom: 14,
+    marginBottom: 12,
   },
   syncText: {
     color: '#166534',
@@ -119,22 +134,34 @@ const styles = StyleSheet.create({
   },
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#f1f5f9',
     paddingBottom: 10,
+    gap: 12,
   },
   flexOne: {
     flex: 1,
+    minWidth: 0,
   },
   merchant: {
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#0f172a',
   },
   meta: {
     color: '#64748b',
     fontSize: 13,
     marginTop: 2,
+  },
+  rowRight: {
+    alignItems: 'flex-end',
+    gap: 6,
+    maxWidth: 150,
+  },
+  amount: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '800',
   },
 });

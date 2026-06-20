@@ -19,7 +19,11 @@ const FilterButton = ({
   onPress: () => void;
 }) => (
   <Pressable style={[styles.filterBtn, active ? styles.filterBtnActive : null]} onPress={onPress}>
-    <Text style={[styles.filterText, active ? styles.filterTextActive : null]}>{label}</Text>
+    <Text
+      style={[styles.filterText, active ? styles.filterTextActive : null]}
+      numberOfLines={1}>
+      {label}
+    </Text>
   </Pressable>
 );
 
@@ -117,12 +121,17 @@ export const TransactionHistoryScreen = () => {
                   navigation.navigate('TransactionDetail', {transactionId: item.id})
                 }>
                 <View style={styles.flexOne}>
-                  <Text style={styles.merchant}>{item.merchant.name}</Text>
+                  <Text style={styles.merchant} numberOfLines={1}>
+                    {item.merchant.name}
+                  </Text>
                   <Text style={styles.meta}>
-                    INR {item.amount.toFixed(2)} | {new Date(item.timestamp).toLocaleString()}
+                    {new Date(item.timestamp).toLocaleString()}
                   </Text>
                 </View>
-                <StatusPill status={item.status} />
+                <View style={styles.rowRight}>
+                  <Text style={styles.amount}>INR {item.amount.toFixed(2)}</Text>
+                  <StatusPill status={item.status} />
+                </View>
               </Pressable>
             ))
           )}
@@ -134,7 +143,8 @@ export const TransactionHistoryScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: 18,
+    paddingBottom: 24,
     flexGrow: 1,
   },
   filterTitle: {
@@ -149,48 +159,62 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: 8,
+    marginBottom: 4,
   },
   filterBtn: {
     borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 16,
-    paddingHorizontal: 10,
+    borderColor: '#c7d2e1',
+    borderRadius: 8,
+    paddingHorizontal: 11,
     paddingVertical: 6,
     backgroundColor: '#ffffff',
+    maxWidth: '100%',
   },
   filterBtnActive: {
-    backgroundColor: '#dbeafe',
-    borderColor: '#1d4ed8',
+    backgroundColor: '#eff6ff',
+    borderColor: '#1557d5',
   },
   filterText: {
     color: '#475569',
     fontSize: 12,
   },
   filterTextActive: {
-    color: '#1d4ed8',
-    fontWeight: '700',
+    color: '#1557d5',
+    fontWeight: '800',
   },
   card: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     marginBottom: 10,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 12,
+    borderColor: '#dbe3ee',
+    borderRadius: 8,
     padding: 12,
     backgroundColor: '#ffffff',
+    gap: 12,
   },
   flexOne: {
     flex: 1,
+    minWidth: 0,
   },
   merchant: {
-    fontWeight: '700',
+    fontWeight: '800',
     color: '#0f172a',
   },
   meta: {
     color: '#64748b',
     fontSize: 12,
     marginTop: 2,
+  },
+  rowRight: {
+    alignItems: 'flex-end',
+    gap: 6,
+    maxWidth: 150,
+  },
+  amount: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '800',
   },
   empty: {
     color: '#94a3b8',

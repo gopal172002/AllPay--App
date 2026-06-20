@@ -6,6 +6,7 @@ import {toast} from '../utils/toast';
 
 export const SettingsScreen = () => {
   const {
+    profile,
     locationEnabled,
     setLocationCaptureEnabled,
     installedUpiApps,
@@ -60,7 +61,12 @@ export const SettingsScreen = () => {
         <Section title="Location capture (opt-in)">
           <View style={styles.row}>
             <Text style={styles.label}>Capture GPS at payment confirmation</Text>
-            <Switch value={locationEnabled} onValueChange={toggleLocation} />
+            <Switch
+              value={locationEnabled}
+              onValueChange={toggleLocation}
+              trackColor={{false: '#cbd5e1', true: '#bfdbfe'}}
+              thumbColor={locationEnabled ? '#1557d5' : '#ffffff'}
+            />
           </View>
           <Text style={styles.helpText}>
             If permission is denied, GPS stays null and payment flow is unaffected.
@@ -82,6 +88,19 @@ export const SettingsScreen = () => {
         </Section>
 
         <Section title="Account">
+          {profile ? (
+            <View style={styles.profileBox}>
+              <Text style={styles.profileName} numberOfLines={1}>
+                {profile.employeeName}
+              </Text>
+              <Text style={styles.profileMeta} numberOfLines={1}>
+                {profile.employeeId} | {profile.department}
+              </Text>
+              <Text style={styles.profileMeta} numberOfLines={1}>
+                {profile.companyName}
+              </Text>
+            </View>
+          ) : null}
           <Text style={styles.helpText}>
             Logout will clear saved tokens, profile, and local transaction data.
           </Text>
@@ -94,7 +113,8 @@ export const SettingsScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: 18,
+    paddingBottom: 24,
     flexGrow: 1,
   },
   row: {
@@ -111,16 +131,22 @@ const styles = StyleSheet.create({
   helpText: {
     color: '#64748b',
     marginTop: 8,
+    lineHeight: 20,
   },
   appRow: {
     flexDirection: 'row',
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#dbe3ee',
+    borderRadius: 8,
+    padding: 10,
     marginBottom: 10,
+    backgroundColor: '#ffffff',
   },
   appLogo: {
     width: 28,
     height: 28,
-    borderRadius: 14,
+    borderRadius: 8,
     backgroundColor: '#dbeafe',
     color: '#1e3a8a',
     textAlign: 'center',
@@ -133,6 +159,24 @@ const styles = StyleSheet.create({
   },
   item: {
     color: '#0f172a',
-    fontWeight: '600',
+    fontWeight: '800',
+  },
+  profileBox: {
+    borderWidth: 1,
+    borderColor: '#dbe3ee',
+    borderRadius: 8,
+    padding: 12,
+    backgroundColor: '#f8fafc',
+    marginBottom: 4,
+  },
+  profileName: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  profileMeta: {
+    color: '#64748b',
+    fontSize: 13,
+    marginTop: 3,
   },
 });

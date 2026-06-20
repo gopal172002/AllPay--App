@@ -1,4 +1,4 @@
-import {NavigationContainer} from '@react-navigation/native';
+import {DefaultTheme, NavigationContainer} from '@react-navigation/native';
 import {createBottomTabNavigator} from '@react-navigation/bottom-tabs';
 import {createNativeStackNavigator} from '@react-navigation/native-stack';
 import React from 'react';
@@ -19,24 +19,38 @@ import {TransactionHistoryScreen} from './src/screens/TransactionHistoryScreen';
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tabs = createBottomTabNavigator();
 
+const navigationTheme = {
+  ...DefaultTheme,
+  colors: {
+    ...DefaultTheme.colors,
+    background: '#f4f7fb',
+    card: '#ffffff',
+    primary: '#1557d5',
+    text: '#0f172a',
+    border: '#dbe3ee',
+  },
+};
+
 const MainTabs = () => {
   const insets = useSafeAreaInsets();
   return (
     <Tabs.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#1d4ed8',
+        tabBarActiveTintColor: '#1557d5',
         tabBarInactiveTintColor: '#64748b',
-        tabBarLabelStyle: {fontWeight: '700', fontSize: 12},
+        tabBarHideOnKeyboard: true,
+        tabBarLabelStyle: {fontWeight: '800', fontSize: 12, marginTop: 2},
+        tabBarItemStyle: {paddingTop: 4},
         headerTitleStyle: {fontWeight: '800', color: '#0f172a'},
         headerShadowVisible: false,
-        headerStyle: {backgroundColor: '#f8fafc'},
+        headerStyle: {backgroundColor: '#ffffff'},
         tabBarStyle: {
-          minHeight: 52 + insets.bottom,
+          minHeight: 58 + insets.bottom,
           paddingTop: 6,
-          paddingBottom: Math.max(insets.bottom, 6),
+          paddingBottom: Math.max(insets.bottom, 8),
           borderTopWidth: 1,
-          borderTopColor: '#e2e8f0',
+          borderTopColor: '#dbe3ee',
           backgroundColor: '#ffffff',
         },
       }}>
@@ -54,8 +68,16 @@ const Navigator = () => {
   }
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator>
+    <NavigationContainer theme={navigationTheme}>
+      <Stack.Navigator
+        screenOptions={{
+          headerBackTitle: '',
+          headerShadowVisible: false,
+          headerTintColor: '#1557d5',
+          headerTitleStyle: {color: '#0f172a', fontWeight: '800'},
+          headerStyle: {backgroundColor: '#ffffff'},
+          contentStyle: {backgroundColor: '#f4f7fb'},
+        }}>
         <Stack.Screen
           name="MainTabs"
           component={MainTabs}
@@ -84,7 +106,7 @@ const Navigator = () => {
 function App() {
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="dark-content" />
+      <StatusBar barStyle="dark-content" backgroundColor="#f4f7fb" />
       <AppProvider>
         <Navigator />
       </AppProvider>

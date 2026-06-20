@@ -2,6 +2,7 @@ import {RouteProp, useRoute} from '@react-navigation/native';
 import React, {useMemo, useState} from 'react';
 import {
   Image,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -22,6 +23,7 @@ import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
 import {Receipt} from '../types';
 import {isPaymentCaptured} from '../services/payments';
+import {toast} from '../utils/toast';
 
 type Route = RouteProp<RootStackParamList, 'TransactionDetail'>;
 
@@ -38,6 +40,15 @@ const normalizeReceipts = (assets: any[]): Receipt[] =>
     fileSize: asset.fileSize ?? 0,
     type: asset.type ?? 'image/jpeg',
   }));
+
+const DetailRow = ({label, value}: {label: string; value: string}) => (
+  <View style={styles.detailRow}>
+    <Text style={styles.detailLabel}>{label}</Text>
+    <Text style={styles.detailValue} numberOfLines={2}>
+      {value}
+    </Text>
+  </View>
+);
 
 export const TransactionDetailScreen = () => {
   const route = useRoute<Route>();
@@ -67,6 +78,12 @@ export const TransactionDetailScreen = () => {
   const paymentReady = isPaymentCaptured(tx.paymentStatus);
   const canSubmit =
     paymentReady && (tx.status === 'Recorded' || tx.status === 'Flagged');
+  let submitLabel = 'Already submitted';
+  if (!paymentReady) {
+    submitLabel = 'Payment not confirmed';
+  } else if (canSubmit) {
+    submitLabel = 'Submit for reimbursement';
+  }
 
   const attachFromSource = async (source: 'camera' | 'gallery') => {
     const pickerResult =
@@ -107,21 +124,21 @@ export const TransactionDetailScreen = () => {
         <StatusPill status={tx.status} />
 
         <Section title="Payment details">
-          <Text style={styles.row}>Merchant: {tx.merchant.name}</Text>
-          <Text style={styles.row}>MCC: {tx.merchant.mcc}</Text>
-          <Text style={styles.row}>UPI Ref ID: {tx.upiRefId ?? '--'}</Text>
-          <Text style={styles.row}>
-            Payment: {tx.paymentStatus ?? 'not started'}
-          </Text>
-          <Text style={styles.row}>Amount: INR {tx.amount.toFixed(2)}</Text>
-          <Text style={styles.row}>UPI App: {tx.upiApp}</Text>
-          <Text style={styles.row}>Sync: {tx.syncStatus}</Text>
-          <Text style={styles.row}>
-            Location:{' '}
-            {tx.location
-              ? `${tx.location.latitude.toFixed(4)}, ${tx.location.longitude.toFixed(4)}`
-              : 'Not captured'}
-          </Text>
+          <DetailRow label="Merchant" value={tx.merchant.name} />
+          <DetailRow label="MCC" value={tx.merchant.mcc} />
+          <DetailRow label="UPI Ref ID" value={tx.upiRefId ?? '--'} />
+          <DetailRow label="Payment" value={tx.paymentStatus ?? 'Not started'} />
+          <DetailRow label="Amount" value={`INR ${tx.amount.toFixed(2)}`} />
+          <DetailRow label="UPI App" value={tx.upiApp} />
+          <DetailRow label="Sync" value={tx.syncStatus} />
+          <DetailRow
+            label="Location"
+            value={
+              tx.location
+                ? `${tx.location.latitude.toFixed(4)}, ${tx.location.longitude.toFixed(4)}`
+                : 'Not captured'
+            }
+          />
         </Section>
 
         <Section title="Receipts (max 3, within 48h)">
@@ -153,7 +170,23 @@ export const TransactionDetailScreen = () => {
           <Text style={styles.helpText}>Selected purpose: {purpose}</Text>
           <View style={styles.purposeWrap}>
             {EXPENSE_PURPOSES.map(item => (
-              <SecondaryButton key={item} label={item} onPress={() => setPurpose(item)} />
+              <Pressable
+                accessibilityRole="button"
+                key={item}
+                onPress={() => setPurpose(item)}
+                style={[
+                  styles.purposeChip,
+                  purpose === item ? styles.purposeChipActive : null,
+                ]}>
+                <Text
+                  style={[
+                    styles.purposeText,
+                    purpose === item ? styles.purposeTextActive : null,
+                  ]}
+                  numberOfLines={1}>
+                  {item}
+                </Text>
+              </Pressable>
             ))}
           </View>
           <FormInput
@@ -165,7 +198,7 @@ export const TransactionDetailScreen = () => {
             editable={canSubmit}
           />
           <PrimaryButton
-            label={canSubmit ? 'Submit for reimbursement' : 'Already submitted'}
+            label={submitLabel}
             onPress={submit}
             disabled={!canSubmit}
           />
@@ -194,7 +227,8 @@ export const TransactionDetailScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: 18,
+    paddingBottom: 24,
     flexGrow: 1,
   },
   centered: {
@@ -210,6 +244,25 @@ const styles = StyleSheet.create({
     color: '#1e293b',
     marginBottom: 6,
   },
+  detailRow: {
+    borderBottomWidth: 1,
+    borderBottomColor: '#eef2f7',
+    paddingBottom: 10,
+    marginBottom: 10,
+  },
+  detailLabel: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
+    marginBottom: 3,
+    textTransform: 'uppercase',
+  },
+  detailValue: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '700',
+    lineHeight: 21,
+  },
   thumbWrap: {
     flexDirection: 'row',
     flexWrap: 'wrap',
@@ -218,10 +271,10 @@ const styles = StyleSheet.create({
   thumb: {
     width: 96,
     height: 96,
-    borderRadius: 10,
+    borderRadius: 8,
     backgroundColor: '#cbd5e1',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: '#dbe3ee',
   },
   empty: {
     color: '#94a3b8',
@@ -230,8 +283,34 @@ const styles = StyleSheet.create({
   helpText: {
     color: '#64748b',
     marginBottom: 8,
+    lineHeight: 20,
   },
   purposeWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 8,
+  },
+  purposeChip: {
+    borderWidth: 1,
+    borderColor: '#c7d2e1',
+    borderRadius: 8,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+    backgroundColor: '#ffffff',
+    maxWidth: '100%',
+  },
+  purposeChipActive: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#1557d5',
+  },
+  purposeText: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  purposeTextActive: {
+    color: '#1557d5',
+    fontWeight: '800',
   },
 });

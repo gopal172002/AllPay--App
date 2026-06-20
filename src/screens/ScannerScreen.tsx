@@ -141,22 +141,23 @@ export const ScannerScreen = () => {
           ) : (
             <View style={styles.cameraPlaceholder}>
               <Text style={styles.placeholderText}>
-                {Platform.OS === 'android'
-                  ? 'Waiting for camera permission…'
-                  : 'Preparing camera…'}
+              {Platform.OS === 'android'
+                  ? 'Waiting for camera permission...'
+                  : 'Preparing camera...'}
               </Text>
             </View>
           )}
           <SecondaryButton
             label={torchOn ? 'Turn torch off' : 'Turn torch on'}
             onPress={() => setTorchOn(v => !v)}
+            disabled={!cameraAuth}
           />
         </View>
 
         <Section title="Trouble scanning?">
           <Text style={styles.hintText}>
             Ensure the full QR is in the frame. UPI QRs use the
-            <Text style={styles.mono}> upi://pay?…</Text> format.
+            <Text style={styles.mono}> upi://pay?...</Text> format.
           </Text>
           {showManual ? (
             <>
@@ -184,24 +185,24 @@ export const ScannerScreen = () => {
 
 const styles = StyleSheet.create({
   container: {
-    padding: 16,
+    padding: 18,
     paddingBottom: 24,
     flexGrow: 1,
   },
   cameraWrap: {
-    marginBottom: 14,
+    marginBottom: 12,
   },
   camera: {
     width: '100%',
     height: 320,
-    borderRadius: 16,
+    borderRadius: 8,
     overflow: 'hidden',
   },
   cameraPlaceholder: {
     width: '100%',
     height: 320,
-    borderRadius: 16,
-    backgroundColor: '#0f172a',
+    borderRadius: 8,
+    backgroundColor: '#111827',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -213,6 +214,7 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 13,
     lineHeight: 20,
+    marginBottom: 2,
   },
   mono: {
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
