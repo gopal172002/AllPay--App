@@ -28,8 +28,8 @@ export type PaymentStatusResponse = {
   message?: string;
 };
 
-/** When true, PaymentScreen uses Razorpay instead of simulated UPI callback. */
-export const USE_RAZORPAY_UPI = true;
+/** When true, PaymentScreen collects through Razorpay instead of recording merchant UPI handoff. */
+export const USE_RAZORPAY_UPI = false;
 
 export async function createPaymentOrder(input: {
   txId: string;
