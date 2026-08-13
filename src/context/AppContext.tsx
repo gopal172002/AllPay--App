@@ -207,12 +207,13 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
             ...item,
             upiRefId: item.upiRefId ?? randomRef('UPI'),
             status: 'Recorded' as const,
+            paymentStatus: 'legacy_simulated' as PaymentStatus,
           };
         }
         if (status === 'pending') {
-          return {...item, status: 'Flagged' as const};
+          return {...item, status: 'Flagged' as const, paymentStatus: 'payment_processing' as PaymentStatus};
         }
-        return {...item, status: 'Abandoned' as const};
+        return {...item, status: 'Abandoned' as const, paymentStatus: 'payment_failed' as PaymentStatus};
       });
       await saveTransactions(next);
       const updatedTx = next.find(item => item.id === id);
@@ -251,7 +252,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     async (id: string, purpose: string, note: string) => {
       const current = transactions.find(item => item.id === id);
       if (current && !isPaymentCaptured(current.paymentStatus)) {
-        toast.error('Payment required', 'Complete Razorpay payment before submitting for reimbursement.');
+        toast.error('Payment required', 'Confirm the merchant payment before submitting for reimbursement.');
         return;
       }
       const next = transactions.map(item =>

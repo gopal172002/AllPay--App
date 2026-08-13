@@ -51,7 +51,6 @@ export const buildUpiPaymentLink = (
     pn: merchant.name,
     am: amount.toFixed(2),
     cu: 'INR',
-    tn: `Allpay payment to ${merchant.name}`,
   });
   return `upi://pay?${params.toString()}`;
 };

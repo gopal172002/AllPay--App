@@ -27,7 +27,7 @@ import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
 import {LocationPoint, UpiApp} from '../types';
 import {getPolicyWarningFromPolicies} from '../utils/policies';
-import {randomRef} from '../utils/upi';
+import {buildUpiPaymentLink, randomRef} from '../utils/upi';
 import {toast} from '../utils/toast';
 import {
   USE_RAZORPAY_UPI,
@@ -122,7 +122,7 @@ export const PaymentScreen = () => {
   );
 
   const chooseResult = (txId: string) => {
-    Alert.alert('Simulate UPI callback', 'Select payment outcome', [
+    Alert.alert('Record payment result', 'Choose what happened in the UPI app.', [
       {
         text: 'SUCCESS (00)',
         onPress: async () => {
@@ -298,13 +298,13 @@ export const PaymentScreen = () => {
           return;
         }
 
-        const link = `upi://pay?pa=${encodeURIComponent(merchant.vpa)}&pn=${encodeURIComponent(merchant.name)}&am=${parsedAmount.toFixed(2)}&cu=INR`;
+        const link = buildUpiPaymentLink(merchant, parsedAmount);
         try {
           await Linking.openURL(link);
+          chooseResult(tx.id);
         } catch {
-          toast.error('Handoff failed', 'Unable to open the selected UPI app.');
+          toast.error('Handoff failed', 'Unable to open a UPI app.');
         }
-        chooseResult(tx.id);
       } finally {
         setPaying(false);
         setStatusMessage(null);
