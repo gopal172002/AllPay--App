@@ -1,19 +1,7 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
-import Geolocation from 'react-native-geolocation-service';
-import React, {useMemo, useState} from 'react';
-import {
-  Alert,
-  Linking,
-  PermissionsAndroid,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
-import RazorpayCheckout from 'react-native-razorpay';
+import React, {useState} from 'react';
+import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -21,64 +9,22 @@ import {
   Screen,
   ScreenHeader,
   Section,
-  SecondaryButton,
 } from '../components/UI';
 import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
-import {LocationPoint, UpiApp} from '../types';
 import {getPolicyWarningFromPolicies} from '../utils/policies';
-import {buildUpiPaymentLink, randomRef} from '../utils/upi';
 import {toast} from '../utils/toast';
+import {trackUpiEvent} from '../upi/analytics';
+import {isSaneAmountPaise, paiseToRupeeLabel, parseRupeeInputToPaise} from '../upi/money';
+import {buildUpiPayUri} from '../upi/scanner/UpiQrParser';
+import {hasCompatibleUpiApp, launchUpiIntent} from '../upi/payment/UpiPaymentLauncher';
 import {
-  USE_RAZORPAY_UPI,
-  confirmPaymentOnBackend,
-  createPaymentOrder,
-  isTerminalPaymentStatus,
-  markCheckoutOpened,
-  pollPaymentStatus,
-} from '../services/payments';
-
-const GOOGLE_PAY_PLAY =
-  'https://play.google.com/store/apps/details?id=com.google.android.apps.nbu.paisa.user';
-const GOOGLE_PAY_APP_STORE = 'https://apps.apple.com/app/google-pay/id1193357041';
+  mapUpiResultToStatus,
+  parseUpiPaymentResult,
+} from '../upi/payment/UpiPaymentResultParser';
 
 type Route = RouteProp<RootStackParamList, 'Payment'>;
 type Nav = NativeStackNavigationProp<RootStackParamList>;
-
-const numberPattern = /^\d*\.?\d{0,2}$/;
-
-const requestLocation = async (): Promise<LocationPoint> => {
-  if (Platform.OS === 'android') {
-    const permission = await PermissionsAndroid.request(
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-      {
-        title: 'Location permission',
-        message:
-          'Allpay captures one-time location at payment confirmation when enabled.',
-        buttonPositive: 'Allow',
-      },
-    );
-    if (permission !== PermissionsAndroid.RESULTS.GRANTED) {
-      return null;
-    }
-  }
-
-  return new Promise(resolve => {
-    Geolocation.getCurrentPosition(
-      pos => {
-        resolve({
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          capturedAt: new Date().toISOString(),
-        });
-      },
-      () => resolve(null),
-      {enableHighAccuracy: true, timeout: 7000},
-    );
-  });
-};
-
-const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
 const DetailRow = ({label, value}: {label: string; value: string}) => (
   <View style={styles.detailRow}>
@@ -97,177 +43,122 @@ export const PaymentScreen = () => {
     profile,
     policies,
     transactions,
-    installedUpiApps,
-    defaultUpiAppId,
-    setDefaultUpiApp,
-    addTransaction,
-    setTransactionResult,
-    updateTransactionPayment,
-    locationEnabled,
+    createUpiPayment,
+    markUpiAppOpened,
+    applyUpiPaymentStatus,
   } = useAppData();
 
-  const qrLockedAmount = merchant.amount;
-  const [amount, setAmount] = useState(
-    merchant.amount ? merchant.amount.toFixed(2) : '',
-  );
-  const [selectedAppId, setSelectedAppId] = useState<string | null>(
-    defaultUpiAppId ?? (installedUpiApps[0]?.id ?? null),
+  const qrLockedPaise = merchant.amountPaise;
+  const [amountText, setAmountText] = useState(
+    qrLockedPaise !== undefined ? paiseToRupeeLabel(qrLockedPaise) : '',
   );
   const [paying, setPaying] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const selectedApp = useMemo<UpiApp | undefined>(
-    () => installedUpiApps.find(item => item.id === selectedAppId),
-    [installedUpiApps, selectedAppId],
-  );
-
-  const chooseResult = (txId: string) => {
-    Alert.alert('Record payment result', 'Choose what happened in the UPI app.', [
-      {
-        text: 'SUCCESS (00)',
-        onPress: async () => {
-          await setTransactionResult(txId, 'success');
-          navigation.replace('TransactionDetail', {transactionId: txId});
-        },
-      },
-      {
-        text: 'PENDING',
-        onPress: async () => {
-          await setTransactionResult(txId, 'pending');
-          navigation.replace('TransactionDetail', {transactionId: txId});
-        },
-      },
-      {
-        text: 'USER_CANCELLED',
-        style: 'destructive',
-        onPress: async () => {
-          await setTransactionResult(txId, 'failure');
-          navigation.replace('TransactionDetail', {transactionId: txId});
-        },
-      },
-    ]);
-  };
-
-  const pollUntilTerminal = async (txId: string) => {
-    for (let attempt = 0; attempt < 30; attempt += 1) {
-      const statusRes = await pollPaymentStatus(txId);
-      if (statusRes.ok && statusRes.paymentStatus && isTerminalPaymentStatus(statusRes.paymentStatus)) {
-        return statusRes.paymentStatus;
-      }
-      await sleep(2000);
-    }
-    return undefined;
-  };
-
-  const payWithRazorpay = async (txId: string, parsedAmount: number, selectedAppName: string) => {
-    if (!profile) {
+  const continuePayment = async (parsedPaise: number) => {
+    if (paying || !profile) {
       return;
     }
-    setStatusMessage('Creating payment order...');
-    const orderRes = await createPaymentOrder({
-      txId,
-      amount: parsedAmount,
-      employeeId: profile.employeeId,
-      employeeName: profile.employeeName,
-      department: profile.department,
-      merchant,
-      upiApp: selectedAppName,
-    });
-    if (!orderRes.ok || !orderRes.orderId || !orderRes.keyId) {
-      toast.error('Payment unavailable', orderRes.message ?? 'Could not create Razorpay order.');
-      await updateTransactionPayment(txId, {
-        paymentStatus: 'payment_failed',
-        status: 'Abandoned',
-      });
-      return;
-    }
-
-    await updateTransactionPayment(txId, {
-      paymentStatus: 'order_created',
-      razorpayOrderId: orderRes.orderId,
-      status: 'Recorded',
-    });
-
-    await markCheckoutOpened(txId);
-    setStatusMessage('Opening UPI app...');
-
+    setPaying(true);
     try {
-      const checkoutData = await RazorpayCheckout.open({
-        key: orderRes.keyId,
-        amount: String(orderRes.amount ?? Math.round(parsedAmount * 100)),
-        currency: orderRes.currency ?? 'INR',
-        name: profile.companyName,
-        description: `Payment to ${merchant.name}`,
-        order_id: orderRes.orderId,
-        method: 'upi',
-        prefill: {
-          name: profile.employeeName,
-          contact: profile.mobile,
-        },
-        theme: {color: '#1d4ed8'},
+      setStatusMessage('Saving payment...');
+      const payment = await createUpiPayment({
+        payeeVpa: merchant.vpa,
+        payeeName: merchant.name,
+        amountPaise: parsedPaise,
+        note: merchant.note,
+        category: merchant.category,
+        mcc: merchant.mcc,
+      });
+      trackUpiEvent('upi_payment_confirmed');
+
+      const uri = buildUpiPayUri({
+        payeeVpa: merchant.vpa,
+        payeeName: merchant.name,
+        amountPaise: parsedPaise,
+        note: merchant.note,
+        transactionReference: payment.launchTxnRef,
       });
 
-      setStatusMessage('Confirming payment...');
-      const confirmRes = await confirmPaymentOnBackend({
-        txId,
-        razorpay_order_id: checkoutData.razorpay_order_id,
-        razorpay_payment_id: checkoutData.razorpay_payment_id,
-        razorpay_signature: checkoutData.razorpay_signature,
-      });
-      if (!confirmRes.ok) {
-        toast.error('Confirmation failed', confirmRes.message ?? 'Could not verify payment.');
+      if (Platform.OS !== 'android') {
+        await applyUpiPaymentStatus(payment.id, 'UNKNOWN');
+        toast.error(
+          'Android required',
+          'UPI Intent payments are supported on Android devices with a UPI app.',
+        );
+        navigation.replace('PaymentResult', {paymentId: payment.id});
+        return;
       }
 
-      const finalStatus = (await pollUntilTerminal(txId)) ?? confirmRes.paymentStatus ?? 'payment_processing';
-      const captured = finalStatus === 'payment_captured';
-      await updateTransactionPayment(txId, {
-        paymentStatus: finalStatus,
-        razorpayOrderId: orderRes.orderId,
-        razorpayPaymentId: checkoutData.razorpay_payment_id,
-        upiRefId: checkoutData.razorpay_payment_id,
-        status: captured ? 'Recorded' : finalStatus === 'payment_failed' ? 'Abandoned' : 'Recorded',
-      });
+      const hasApp = await hasCompatibleUpiApp(uri);
+      if (!hasApp) {
+        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+        toast.error(
+          'No UPI app',
+          'No compatible UPI payment app was found on this device.',
+        );
+        navigation.replace('PaymentResult', {paymentId: payment.id});
+        return;
+      }
 
-      if (captured) {
-        toast.success('Payment captured', 'Your UPI payment was confirmed.');
-      } else if (finalStatus === 'payment_failed') {
-        toast.error('Payment failed', 'Please try again.');
+      await markUpiAppOpened(payment.id);
+      setStatusMessage('Opening UPI app...');
+      trackUpiEvent('upi_app_launched');
+      const launch = await launchUpiIntent(uri);
+
+      if (launch.kind === 'no_app') {
+        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+        toast.error(
+          'No UPI app',
+          'No compatible UPI payment app was found on this device.',
+        );
+      } else if (launch.kind === 'cancelled') {
+        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+        trackUpiEvent('upi_result_cancelled');
+      } else if (launch.kind === 'unsupported') {
+        await applyUpiPaymentStatus(payment.id, 'UNKNOWN');
       } else {
-        toast.info('Payment processing', 'We are still confirming your payment.');
+        const parsed = parseUpiPaymentResult(launch.raw);
+        const mapped = mapUpiResultToStatus(parsed, payment.launchTxnRef);
+        await applyUpiPaymentStatus(payment.id, mapped, {
+          upiTxnId: parsed.transactionId ?? undefined,
+          upiTxnRef: parsed.transactionReference ?? undefined,
+          approvalRefNo: parsed.approvalReference ?? undefined,
+          upiResponseCode: parsed.responseCode ?? undefined,
+        });
+        if (mapped === 'SUCCESS_REPORTED') {
+          trackUpiEvent('upi_result_success');
+        } else if (mapped === 'FAILED') {
+          trackUpiEvent('upi_result_failed');
+        } else if (mapped === 'PENDING') {
+          trackUpiEvent('upi_result_pending');
+        } else {
+          trackUpiEvent('upi_result_unknown');
+        }
       }
-      navigation.replace('TransactionDetail', {transactionId: txId});
-    } catch (error: unknown) {
-      const message =
-        typeof error === 'object' && error !== null && 'description' in error
-          ? String((error as {description?: string}).description ?? 'Payment cancelled')
-          : 'Payment cancelled';
-      await updateTransactionPayment(txId, {
-        paymentStatus: 'payment_abandoned',
-        status: 'Abandoned',
-      });
-      toast.error('Payment cancelled', message);
+      navigation.replace('PaymentResult', {paymentId: payment.id});
+    } finally {
+      setPaying(false);
+      setStatusMessage(null);
     }
   };
 
-  const doPayment = async () => {
-    const parsedAmount = Number(amount);
-    if (!amount || !numberPattern.test(amount)) {
-      toast.error('Invalid amount', 'Enter a valid numeric amount up to 2 decimals.');
+  const onConfirm = async () => {
+    const parsedPaise =
+      qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
+    if (parsedPaise === null) {
+      toast.error('Invalid amount', 'Enter a valid amount in rupees.');
       return;
     }
-    if (parsedAmount <= 0) {
-      toast.error('Invalid amount', 'Amount must be greater than zero.');
-      return;
-    }
-    if (!selectedApp) {
-      toast.error('UPI app required', 'Install a UPI app or get one from the store below.');
+    if (!isSaneAmountPaise(parsedPaise)) {
+      toast.error('Invalid amount', 'Amount must be between ₹1.00 and ₹1,00,000.00.');
       return;
     }
 
     const warning =
       profile && policies.length
         ? getPolicyWarningFromPolicies(
-            parsedAmount,
+            Number(paiseToRupeeLabel(parsedPaise)),
             merchant.category,
             profile.employeeId,
             profile.department,
@@ -275,43 +166,8 @@ export const PaymentScreen = () => {
             transactions,
           )
         : null;
-    const continuePayment = async () => {
-      if (paying) {
-        return;
-      }
-      setPaying(true);
-      try {
-        await setDefaultUpiApp(selectedApp.id);
-        const location = locationEnabled ? await requestLocation() : null;
-        const tx = await addTransaction({
-          merchant,
-          amount: parsedAmount,
-          upiAppName: selectedApp.name,
-          upiRefId: randomRef('UPI'),
-          policyWarning: warning ?? undefined,
-          warningAcknowledged: Boolean(warning),
-          location,
-        });
 
-        if (USE_RAZORPAY_UPI) {
-          await payWithRazorpay(tx.id, parsedAmount, selectedApp.name);
-          return;
-        }
-
-        const link = buildUpiPaymentLink(merchant, parsedAmount);
-        try {
-          await Linking.openURL(link);
-          chooseResult(tx.id);
-        } catch {
-          toast.error('Handoff failed', 'Unable to open a UPI app.');
-        }
-      } finally {
-        setPaying(false);
-        setStatusMessage(null);
-      }
-    };
-
-    if (parsedAmount > COMPANY_AMOUNT_LIMIT) {
+    if (parsedPaise > COMPANY_AMOUNT_LIMIT * 100) {
       toast.info(
         'Limit warning',
         `Amount exceeds company threshold of INR ${COMPANY_AMOUNT_LIMIT}.`,
@@ -321,30 +177,26 @@ export const PaymentScreen = () => {
     if (warning) {
       Alert.alert('Policy warning', warning, [
         {text: 'Cancel', style: 'cancel'},
-        {text: 'Proceed anyway', onPress: () => continuePayment()},
+        {text: 'Proceed anyway', onPress: () => continuePayment(parsedPaise)},
       ]);
       return;
     }
-    await continuePayment();
+    await continuePayment(parsedPaise);
   };
 
-  let paymentButtonLabel = USE_RAZORPAY_UPI
-    ? 'Pay with Razorpay UPI'
-    : 'Proceed to UPI app';
-  if (paying) {
-    paymentButtonLabel = 'Processing payment';
-  }
+  const displayPaise =
+    qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
+  const payLabel =
+    displayPaise && isSaneAmountPaise(displayPaise)
+      ? `Pay ₹${paiseToRupeeLabel(displayPaise)}`
+      : 'Continue to UPI';
 
   return (
     <Screen safeTop={false}>
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader
           title="Confirm Payment"
-          subtitle={
-            USE_RAZORPAY_UPI
-              ? 'Pay via Razorpay UPI. Merchant QR details are recorded for reimbursement.'
-              : 'Review merchant details and continue to your preferred UPI app.'
-          }
+          subtitle="Pay the scanned payee in any installed UPI app. Expenzo does not collect this money."
         />
 
         {statusMessage ? (
@@ -353,35 +205,28 @@ export const PaymentScreen = () => {
           </View>
         ) : null}
 
-        <Section title="Merchant details">
-          <DetailRow label="Merchant" value={merchant.name} />
+        <Section title="Payee">
+          <DetailRow label="Name" value={merchant.name} />
           <DetailRow label="UPI ID" value={merchant.vpa} />
-          <View style={styles.metaRow}>
-            <View style={styles.metaPill}>
-              <Text style={styles.metaLabel}>Category: {merchant.category}</Text>
-            </View>
-            <View style={styles.metaPill}>
-              <Text style={styles.metaLabel}>MCC: {merchant.mcc}</Text>
-            </View>
-          </View>
+          {merchant.note ? <DetailRow label="Note" value={merchant.note} /> : null}
         </Section>
 
-        <Section title="Payment amount">
+        <Section title="Amount">
           <FormInput
-            value={amount}
+            value={amountText}
             onChangeText={text => {
-              if (qrLockedAmount !== undefined) {
+              if (qrLockedPaise !== undefined) {
                 return;
               }
-              if (numberPattern.test(text)) {
-                setAmount(text);
+              if (text === '' || /^\d+(\.\d{0,2})?$/.test(text)) {
+                setAmountText(text);
               }
             }}
-            editable={qrLockedAmount === undefined}
+            editable={qrLockedPaise === undefined}
             keyboardType="decimal-pad"
             placeholder="Enter amount in INR"
           />
-          {qrLockedAmount !== undefined ? (
+          {qrLockedPaise !== undefined ? (
             <Text style={styles.helpText}>Amount is fixed by the merchant QR.</Text>
           ) : (
             <Text style={styles.helpText}>
@@ -390,49 +235,14 @@ export const PaymentScreen = () => {
           )}
         </Section>
 
-        <Section title="Select UPI app">
-          {installedUpiApps.length === 0 ? (
-            <View>
-              <Text style={styles.warningText}>
-                No UPI app detected. Install a UPI app, then return and tap refresh in
-                Settings, or use the store link below.
-              </Text>
-              <SecondaryButton
-                label={Platform.OS === 'ios' ? 'Get a UPI app (App Store)' : 'Get Google Pay (Play Store)'}
-                onPress={() =>
-                  Linking.openURL(
-                    Platform.OS === 'ios' ? GOOGLE_PAY_APP_STORE : GOOGLE_PAY_PLAY,
-                  )
-                }
-              />
-            </View>
-          ) : (
-            installedUpiApps.map(app => (
-              <Pressable
-                key={app.id}
-                onPress={() => setSelectedAppId(app.id)}
-                style={[
-                  styles.appRow,
-                  selectedAppId === app.id ? styles.appRowActive : null,
-                ]}>
-                <Text style={styles.appLogo}>{app.logo}</Text>
-                <View style={styles.appInfo}>
-                  <Text style={styles.appName}>{app.name}</Text>
-                  <Text style={styles.appSub}>
-                    {selectedAppId === app.id ? 'Default app selected' : 'Tap to select'}
-                  </Text>
-                </View>
-                <View style={styles.radioDotOuter}>
-                  {selectedAppId === app.id ? <View style={styles.radioDotInner} /> : null}
-                </View>
-              </Pressable>
-            ))
-          )}
-        </Section>
+        <Text style={styles.disclaimer}>
+          You will choose PhonePe, Google Pay, Paytm, BHIM, or a bank UPI app next.
+          Enter your UPI PIN only inside that app.
+        </Text>
 
         <PrimaryButton
-          label={paymentButtonLabel}
-          onPress={doPayment}
+          label={paying ? 'Opening UPI…' : payLabel}
+          onPress={onConfirm}
           disabled={paying}
         />
       </ScrollView>
@@ -478,86 +288,14 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     lineHeight: 21,
   },
-  metaRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  metaPill: {
-    backgroundColor: '#f1f5f9',
-    borderColor: '#dbe3ee',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-  },
-  metaLabel: {
-    color: '#334155',
-    fontSize: 12,
-    fontWeight: '700',
-  },
   helpText: {
     color: '#64748b',
     fontSize: 12,
   },
-  warningText: {
-    color: '#b45309',
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-  appRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#c7d2e1',
-    borderRadius: 8,
-    padding: 12,
-    marginBottom: 10,
-    gap: 10,
-    backgroundColor: '#ffffff',
-  },
-  appRowActive: {
-    borderColor: '#1557d5',
-    backgroundColor: '#eff6ff',
-  },
-  appLogo: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: '#bfdbfe',
-    color: '#1e3a8a',
-    fontWeight: '800',
-    textAlign: 'center',
-    textAlignVertical: 'center',
-    overflow: 'hidden',
-    paddingTop: 8,
-    fontSize: 12,
-  },
-  appInfo: {
-    flex: 1,
-  },
-  appName: {
-    color: '#0f172a',
-    fontWeight: '800',
-  },
-  appSub: {
-    marginTop: 1,
+  disclaimer: {
     color: '#64748b',
-    fontSize: 12,
-  },
-  radioDotOuter: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderColor: '#94a3b8',
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  radioDotInner: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#1557d5',
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 4,
   },
 });

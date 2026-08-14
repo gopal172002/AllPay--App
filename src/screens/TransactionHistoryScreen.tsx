@@ -6,6 +6,7 @@ import {Screen, ScreenHeader, Section, StatusPill} from '../components/UI';
 import {useAppData} from '../context/AppContext';
 import {RootStackParamList} from '../navigation';
 import {Filters, Transaction} from '../types';
+import {paiseToRupeeLabel} from '../upi/money';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 
@@ -44,7 +45,7 @@ const applyFilters = (items: Transaction[], filters: Filters): Transaction[] => 
 
 export const TransactionHistoryScreen = () => {
   const navigation = useNavigation<Nav>();
-  const {transactions} = useAppData();
+  const {transactions, upiPayments} = useAppData();
   const [filters, setFilters] = useState<Filters>({
     status: 'All',
     category: 'All',
@@ -108,6 +109,44 @@ export const TransactionHistoryScreen = () => {
             ))}
           </View>
         </Section>
+
+        {upiPayments.filter(
+          item =>
+            item.status === 'UNKNOWN' ||
+            item.status === 'PENDING' ||
+            item.status === 'UPI_APP_OPENED' ||
+            item.status === 'INITIATED',
+        ).length ? (
+          <Section title="Unresolved UPI payments">
+            {upiPayments
+              .filter(
+                item =>
+                  item.status === 'UNKNOWN' ||
+                  item.status === 'PENDING' ||
+                  item.status === 'UPI_APP_OPENED' ||
+                  item.status === 'INITIATED',
+              )
+              .map(item => (
+                <Pressable
+                  key={item.id}
+                  style={styles.card}
+                  onPress={() =>
+                    navigation.navigate('PaymentResult', {paymentId: item.id})
+                  }>
+                  <View style={styles.flexOne}>
+                    <Text style={styles.merchant} numberOfLines={1}>
+                      {item.payeeName}
+                    </Text>
+                    <Text style={styles.meta}>UPI Intent · not verified</Text>
+                  </View>
+                  <View style={styles.rowRight}>
+                    <Text style={styles.amount}>₹{paiseToRupeeLabel(item.amountPaise)}</Text>
+                    <StatusPill status={item.status} />
+                  </View>
+                </Pressable>
+              ))}
+          </Section>
+        ) : null}
 
         <Section title={`Transactions (${filtered.length})`}>
           {filtered.length === 0 ? (

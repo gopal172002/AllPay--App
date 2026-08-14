@@ -1,28 +1,49 @@
 import NetInfo from '@react-native-community/netinfo';
-import React, {createContext, useCallback, useContext, useEffect, useMemo, useState} from 'react';
+import React, {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {toast} from '../utils/toast';
 import {detectInstalledUpiApps} from '../services/upiApps';
 import {storage} from '../services/storage';
 import {clearEmployeeAuth, saveEmployeeAuth} from '../services/auth';
 import {fetchActivePolicies, patchTransactionOnBackend, syncTransactionToBackend} from '../services/sync';
 import {isPaymentCaptured} from '../services/payments';
-import {LocationPoint, OnboardingProfile, PaymentStatus, Receipt, Transaction, UpiApp} from '../types';
-import {randomRef} from '../utils/upi';
+import {OnboardingProfile, Receipt, Transaction, UpiApp} from '../types';
 import type {ExpensePolicy} from '../utils/policies';
+import type {UpiIntentPayment, UpiIntentStatus} from '../upi/model/types';
+import {createUuid, launchTxnRefFromPaymentId} from '../upi/id';
+import {expenseFromPayment} from '../upi/payment/expenseFromPayment';
+import {
+  applyUpiStatusTransition,
+  recoverUnresolvedStatus,
+  shouldCreateExpense,
+} from '../upi/payment/UpiPaymentState';
+import {
+  createUpiPaymentRemote,
+  syncUpiPaymentResult,
+  toCreatePaymentBody,
+} from '../upi/payment/UpiPaymentRepository';
+import {trackUpiEvent} from '../upi/analytics';
 
-type RecordInput = {
-  merchant: Transaction['merchant'];
-  amount: number;
-  upiAppName: string;
-  upiRefId?: string;
-  policyWarning?: string;
-  warningAcknowledged?: boolean;
-  location: LocationPoint;
+type CreateUpiPaymentInput = {
+  payeeVpa: string;
+  payeeName: string;
+  amountPaise: number;
+  note?: string;
+  category: string;
+  mcc: string;
 };
 
 type AppContextValue = {
   profile: OnboardingProfile | null;
   transactions: Transaction[];
+  upiPayments: UpiIntentPayment[];
   policies: ExpensePolicy[];
   installedUpiApps: UpiApp[];
   defaultUpiAppId: string | null;
@@ -30,24 +51,23 @@ type AppContextValue = {
   syncMessage: string | null;
   completeOnboarding: (profile: OnboardingProfile) => Promise<void>;
   finishEmployeeLogin: (profile: OnboardingProfile, token: string) => Promise<void>;
-  addTransaction: (input: RecordInput) => Promise<Transaction>;
-  setTransactionResult: (id: string, status: 'success' | 'failure' | 'pending') => Promise<void>;
-  updateTransactionPayment: (
-    id: string,
-    patch: Pick<
-      Transaction,
-      | 'paymentStatus'
-      | 'razorpayOrderId'
-      | 'razorpayPaymentId'
-      | 'upiRefId'
-      | 'status'
-    >,
-  ) => Promise<void>;
   submitForReimbursement: (id: string, purpose: string, note: string) => Promise<void>;
   addReceipts: (id: string, receipts: Receipt[]) => Promise<void>;
   setDefaultUpiApp: (id: string) => Promise<void>;
   refreshInstalledUpiApps: () => Promise<void>;
   setLocationCaptureEnabled: (enabled: boolean) => Promise<void>;
+  createUpiPayment: (input: CreateUpiPaymentInput) => Promise<UpiIntentPayment>;
+  markUpiAppOpened: (paymentId: string) => Promise<UpiIntentPayment | null>;
+  applyUpiPaymentStatus: (
+    paymentId: string,
+    status: UpiIntentStatus,
+    refs?: {
+      upiTxnId?: string;
+      upiTxnRef?: string;
+      approvalRefNo?: string;
+      upiResponseCode?: string;
+    },
+  ) => Promise<UpiIntentPayment | null>;
   logout: () => Promise<void>;
 };
 
@@ -56,15 +76,30 @@ const AppContext = createContext<AppContextValue | undefined>(undefined);
 export const AppProvider = ({children}: {children: React.ReactNode}) => {
   const [profile, setProfile] = useState<OnboardingProfile | null>(null);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [upiPayments, setUpiPayments] = useState<UpiIntentPayment[]>([]);
   const [policies, setPolicies] = useState<ExpensePolicy[]>([]);
   const [installedUpiApps, setInstalledUpiApps] = useState<UpiApp[]>([]);
   const [defaultUpiAppId, setDefaultUpiAppId] = useState<string | null>(null);
   const [locationEnabled, setLocationEnabled] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
+  const transactionsRef = useRef<Transaction[]>([]);
+  const upiPaymentsRef = useRef<UpiIntentPayment[]>([]);
+  const profileRef = useRef<OnboardingProfile | null>(null);
+  transactionsRef.current = transactions;
+  upiPaymentsRef.current = upiPayments;
+  profileRef.current = profile;
+
   const saveTransactions = useCallback(async (items: Transaction[]) => {
+    transactionsRef.current = items;
     setTransactions(items);
     await storage.saveTransactions(items);
+  }, []);
+
+  const saveUpiPayments = useCallback(async (items: UpiIntentPayment[]) => {
+    upiPaymentsRef.current = items;
+    setUpiPayments(items);
+    await storage.saveUpiPayments(items);
   }, []);
 
   const syncSingleIfOnline = useCallback(
@@ -73,7 +108,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       if (!net.isConnected) {
         return tx;
       }
-      const response = await syncTransactionToBackend(tx, profile);
+      const response = await syncTransactionToBackend(tx, profileRef.current);
       if (!response.ok) {
         return tx;
       }
@@ -81,7 +116,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       setSyncMessage(`Synced transaction ${updated.id}`);
       return updated;
     },
-    [profile],
+    [],
   );
 
   const flushQueued = useCallback(async () => {
@@ -89,11 +124,12 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     if (!net.isConnected) {
       return;
     }
-    const queued = transactions.filter(item => item.syncStatus === 'queued');
+    const current = transactionsRef.current;
+    const queued = current.filter(item => item.syncStatus === 'queued');
     if (!queued.length) {
       return;
     }
-    const next = [...transactions];
+    const next = [...current];
     for (const tx of queued) {
       const synced = await syncSingleIfOnline(tx);
       const index = next.findIndex(item => item.id === tx.id);
@@ -102,18 +138,26 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       }
     }
     await saveTransactions(next);
-  }, [saveTransactions, syncSingleIfOnline, transactions]);
+  }, [saveTransactions, syncSingleIfOnline]);
 
   useEffect(() => {
     const bootstrap = async () => {
-      const [savedProfile, savedTxs, savedDefault, savedLocation] = await Promise.all([
+      const [savedProfile, savedTxs, savedPayments, savedDefault, savedLocation] = await Promise.all([
         storage.getProfile(),
         storage.getTransactions(),
+        storage.getUpiPayments(),
         storage.getDefaultUpiAppId(),
         storage.getLocationEnabled(),
       ]);
       setProfile(savedProfile);
+      profileRef.current = savedProfile;
       setTransactions(savedTxs);
+      transactionsRef.current = savedTxs;
+      const recovered = savedPayments.map(item => ({
+        ...item,
+        status: recoverUnresolvedStatus(item.status),
+      }));
+      await saveUpiPayments(recovered);
       setDefaultUpiAppId(savedDefault);
       setLocationEnabled(savedLocation);
       if (savedProfile?.employeeId) {
@@ -132,7 +176,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     bootstrap().catch(() => {
       toast.error('Init failed', 'Could not load saved app data.');
     });
-  }, []);
+  }, [saveUpiPayments]);
 
   useEffect(() => {
     const unsubscribe = NetInfo.addEventListener(state => {
@@ -145,6 +189,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
 
   const completeOnboarding = useCallback(async (nextProfile: OnboardingProfile) => {
     await storage.saveProfile(nextProfile);
+    profileRef.current = nextProfile;
     setProfile(nextProfile);
     const policyRes = await fetchActivePolicies(nextProfile.employeeId);
     if (policyRes.ok) {
@@ -155,6 +200,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
   const finishEmployeeLogin = useCallback(async (nextProfile: OnboardingProfile, token: string) => {
     await saveEmployeeAuth(token, nextProfile.employeeId);
     await storage.saveProfile(nextProfile);
+    profileRef.current = nextProfile;
     setProfile(nextProfile);
     const policyRes = await fetchActivePolicies(nextProfile.employeeId);
     if (policyRes.ok) {
@@ -162,100 +208,14 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     }
   }, []);
 
-  const addTransaction = useCallback(
-    async (input: RecordInput) => {
-      if (!profile) {
-        throw new Error('Profile missing');
-      }
-      const id = randomRef('TXN');
-      const tx: Transaction = {
-        id,
-        employeeId: profile.employeeId,
-        merchant: input.merchant,
-        amount: input.amount,
-        timestamp: new Date().toISOString(),
-        upiApp: input.upiAppName,
-        upiRefId: input.upiRefId,
-        status: 'Recorded',
-        syncStatus: 'queued',
-        receipts: [],
-        location: input.location,
-        policyWarning: input.policyWarning,
-        warningAcknowledged: input.warningAcknowledged,
-        paymentStatus: 'draft' as PaymentStatus,
-      };
-      const net = await NetInfo.fetch();
-      const maybeSynced =
-        net.isConnected && tx.status === 'Recorded'
-          ? await syncSingleIfOnline(tx)
-          : tx;
-      const next = [maybeSynced, ...transactions];
-      await saveTransactions(next);
-      return maybeSynced;
-    },
-    [profile, saveTransactions, syncSingleIfOnline, transactions],
-  );
-
-  const setTransactionResult = useCallback(
-    async (id: string, status: 'success' | 'failure' | 'pending') => {
-      const next: Transaction[] = transactions.map(item => {
-        if (item.id !== id) {
-          return item;
-        }
-        if (status === 'success') {
-          return {
-            ...item,
-            upiRefId: item.upiRefId ?? randomRef('UPI'),
-            status: 'Recorded' as const,
-            paymentStatus: 'legacy_simulated' as PaymentStatus,
-          };
-        }
-        if (status === 'pending') {
-          return {...item, status: 'Flagged' as const, paymentStatus: 'payment_processing' as PaymentStatus};
-        }
-        return {...item, status: 'Abandoned' as const, paymentStatus: 'payment_failed' as PaymentStatus};
-      });
-      await saveTransactions(next);
-      const updatedTx = next.find(item => item.id === id);
-      if (updatedTx && profile) {
-        const net = await NetInfo.fetch();
-        if (net.isConnected) {
-          void syncTransactionToBackend(updatedTx, profile).catch(() => null);
-        }
-      }
-    },
-    [profile, saveTransactions, transactions],
-  );
-
-  const updateTransactionPayment = useCallback(
-    async (
-      id: string,
-      patch: Pick<
-        Transaction,
-        'paymentStatus' | 'razorpayOrderId' | 'razorpayPaymentId' | 'upiRefId' | 'status'
-      >,
-    ) => {
-      const next = transactions.map(item => (item.id === id ? {...item, ...patch} : item));
-      await saveTransactions(next);
-      const updatedTx = next.find(item => item.id === id);
-      if (updatedTx && profile) {
-        const net = await NetInfo.fetch();
-        if (net.isConnected) {
-          void syncTransactionToBackend(updatedTx, profile).catch(() => null);
-        }
-      }
-    },
-    [profile, saveTransactions, transactions],
-  );
-
   const submitForReimbursement = useCallback(
     async (id: string, purpose: string, note: string) => {
-      const current = transactions.find(item => item.id === id);
+      const current = transactionsRef.current.find(item => item.id === id);
       if (current && !isPaymentCaptured(current.paymentStatus)) {
         toast.error('Payment required', 'Confirm the merchant payment before submitting for reimbursement.');
         return;
       }
-      const next = transactions.map(item =>
+      const next = transactionsRef.current.map(item =>
         item.id === id
           ? {
               ...item,
@@ -267,28 +227,29 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       );
       await saveTransactions(next);
       setSyncMessage('Reimbursement submitted. You will be notified on approval.');
-      if (profile) {
+      const activeProfile = profileRef.current;
+      if (activeProfile) {
         const net = await NetInfo.fetch();
         if (net.isConnected) {
           void patchTransactionOnBackend(
             id,
             {
-              employeeId: profile.employeeId,
+              employeeId: activeProfile.employeeId,
               status: 'Pending Approval',
               reimbursementPurpose: purpose,
               reimbursementNote: note,
             },
-            profile,
+            activeProfile,
           ).catch(() => null);
         }
       }
     },
-    [profile, saveTransactions, transactions],
+    [saveTransactions],
   );
 
   const addReceipts = useCallback(
     async (id: string, receipts: Receipt[]) => {
-      const next = transactions.map(item => {
+      const next = transactionsRef.current.map(item => {
         if (item.id !== id) {
           return item;
         }
@@ -299,18 +260,19 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       });
       await saveTransactions(next);
       const updated = next.find(item => item.id === id);
-      if (updated && profile) {
+      const activeProfile = profileRef.current;
+      if (updated && activeProfile) {
         const net = await NetInfo.fetch();
         if (net.isConnected) {
           void patchTransactionOnBackend(
             id,
-            {employeeId: profile.employeeId, receipts: updated.receipts},
-            profile,
+            {employeeId: activeProfile.employeeId, receipts: updated.receipts},
+            activeProfile,
           ).catch(() => null);
         }
       }
     },
-    [profile, saveTransactions, transactions],
+    [saveTransactions],
   );
 
   const setDefaultUpiApp = useCallback(async (id: string) => {
@@ -332,11 +294,134 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     setLocationEnabled(enabled);
   }, []);
 
+  const upsertExpenseForPayment = useCallback(
+    async (payment: UpiIntentPayment, remoteExpenseId?: string) => {
+      const activeProfile = profileRef.current;
+      if (!activeProfile || !shouldCreateExpense(payment.status)) {
+        return;
+      }
+      if (transactionsRef.current.some(item => item.paymentId === payment.id)) {
+        return;
+      }
+      const expense = expenseFromPayment(payment, activeProfile.employeeId, remoteExpenseId);
+      await saveTransactions([expense, ...transactionsRef.current]);
+      trackUpiEvent('expense_created_from_upi');
+      const net = await NetInfo.fetch();
+      if (net.isConnected && !remoteExpenseId) {
+        void syncTransactionToBackend(expense, activeProfile).catch(() => null);
+      }
+    },
+    [saveTransactions],
+  );
+
+  const createUpiPayment = useCallback(
+    async (input: CreateUpiPaymentInput) => {
+      const activeProfile = profileRef.current;
+      if (!activeProfile) {
+        throw new Error('Profile missing');
+      }
+      const id = createUuid();
+      const payment: UpiIntentPayment = {
+        id,
+        userId: activeProfile.employeeId,
+        amountPaise: input.amountPaise,
+        currency: 'INR',
+        payeeName: input.payeeName,
+        payeeVpa: input.payeeVpa,
+        note: input.note,
+        category: input.category,
+        mcc: input.mcc,
+        paymentMethod: 'UPI_INTENT',
+        status: 'INITIATED',
+        initiatedAt: new Date().toISOString(),
+        launchTxnRef: launchTxnRefFromPaymentId(id),
+      };
+      await saveUpiPayments([payment, ...upiPaymentsRef.current]);
+      await createUpiPaymentRemote(toCreatePaymentBody(payment, activeProfile.employeeId));
+      return payment;
+    },
+    [saveUpiPayments],
+  );
+
+  const markUpiAppOpened = useCallback(
+    async (paymentId: string) => {
+      const current = upiPaymentsRef.current.find(item => item.id === paymentId);
+      if (!current) {
+        return null;
+      }
+      const transition = applyUpiStatusTransition(current.status, 'UPI_APP_OPENED');
+      if (!transition.ok) {
+        return current;
+      }
+      const updated = {...current, status: transition.status};
+      await saveUpiPayments(
+        upiPaymentsRef.current.map(item => (item.id === paymentId ? updated : item)),
+      );
+      return updated;
+    },
+    [saveUpiPayments],
+  );
+
+  const applyUpiPaymentStatus = useCallback(
+    async (
+      paymentId: string,
+      status: UpiIntentStatus,
+      refs?: {
+        upiTxnId?: string;
+        upiTxnRef?: string;
+        approvalRefNo?: string;
+        upiResponseCode?: string;
+      },
+    ) => {
+      const current = upiPaymentsRef.current.find(item => item.id === paymentId);
+      if (!current) {
+        return null;
+      }
+      const transition = applyUpiStatusTransition(current.status, status);
+      if (!transition.ok) {
+        return current;
+      }
+      const now = new Date().toISOString();
+      const updated: UpiIntentPayment = {
+        ...current,
+        status: transition.status,
+        upiTxnId: refs?.upiTxnId ?? current.upiTxnId,
+        upiTxnRef: refs?.upiTxnRef ?? current.upiTxnRef,
+        approvalRefNo: refs?.approvalRefNo ?? current.approvalRefNo,
+        upiResponseCode: refs?.upiResponseCode ?? current.upiResponseCode,
+        returnedAt: current.returnedAt ?? now,
+        completedAt:
+          shouldCreateExpense(transition.status) ||
+          transition.status === 'FAILED' ||
+          transition.status === 'CANCELLED'
+            ? current.completedAt ?? now
+            : current.completedAt,
+      };
+      await saveUpiPayments(
+        upiPaymentsRef.current.map(item => (item.id === paymentId ? updated : item)),
+      );
+      const employeeId = profileRef.current?.employeeId ?? updated.userId;
+      const remote = await syncUpiPaymentResult(updated, employeeId);
+      if (shouldCreateExpense(updated.status)) {
+        await upsertExpenseForPayment(
+          {...updated, expenseId: remote.expenseId ?? updated.expenseId},
+          remote.expenseId,
+        );
+      }
+      return updated;
+    },
+    [saveUpiPayments, upsertExpenseForPayment],
+  );
+
   const logout = useCallback(async () => {
     await clearEmployeeAuth();
     await storage.clearSession();
+    profileRef.current = null;
+    transactionsRef.current = [];
+    upiPaymentsRef.current = [];
     setProfile(null);
     setTransactions([]);
+    setUpiPayments([]);
     setPolicies([]);
     setDefaultUpiAppId(null);
     setLocationEnabled(false);
@@ -347,6 +432,7 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
     () => ({
       profile,
       transactions,
+      upiPayments,
       policies,
       installedUpiApps,
       defaultUpiAppId,
@@ -354,35 +440,36 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
       syncMessage,
       completeOnboarding,
       finishEmployeeLogin,
-      addTransaction,
-      setTransactionResult,
-      updateTransactionPayment,
       submitForReimbursement,
       addReceipts,
       setDefaultUpiApp,
       refreshInstalledUpiApps,
       setLocationCaptureEnabled,
+      createUpiPayment,
+      markUpiAppOpened,
+      applyUpiPaymentStatus,
       logout,
     }),
     [
       addReceipts,
-      addTransaction,
+      applyUpiPaymentStatus,
       completeOnboarding,
+      createUpiPayment,
       finishEmployeeLogin,
       defaultUpiAppId,
       installedUpiApps,
       locationEnabled,
+      markUpiAppOpened,
       profile,
       policies,
       refreshInstalledUpiApps,
       setDefaultUpiApp,
       setLocationCaptureEnabled,
       logout,
-      setTransactionResult,
-      updateTransactionPayment,
       submitForReimbursement,
       syncMessage,
       transactions,
+      upiPayments,
     ],
   );
 

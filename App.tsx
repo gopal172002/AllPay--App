@@ -11,6 +11,7 @@ import {RootStackParamList} from './src/navigation';
 import {HomeScreen} from './src/screens/HomeScreen';
 import {OnboardingScreen} from './src/screens/OnboardingScreen';
 import {PaymentScreen} from './src/screens/PaymentScreen';
+import {PaymentResultScreen} from './src/screens/PaymentResultScreen';
 import {ScannerScreen} from './src/screens/ScannerScreen';
 import {SettingsScreen} from './src/screens/SettingsScreen';
 import {TransactionDetailScreen} from './src/screens/TransactionDetailScreen';
@@ -92,6 +93,11 @@ const Navigator = () => {
           name="Payment"
           component={PaymentScreen}
           options={{title: 'Payment'}}
+        />
+        <Stack.Screen
+          name="PaymentResult"
+          component={PaymentResultScreen}
+          options={{title: 'Payment result'}}
         />
         <Stack.Screen
           name="TransactionDetail"

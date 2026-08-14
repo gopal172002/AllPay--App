@@ -47,7 +47,7 @@ export const HomeScreen = () => {
 
         <Section title="Quick action">
           <PrimaryButton
-            label="Scan Merchant QR"
+            label="Scan & Pay"
             onPress={() => navigation.navigate('Scan')}
           />
         </Section>

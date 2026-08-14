@@ -35,6 +35,12 @@ jest.mock('react-native-razorpay', () => ({
   },
 }));
 
+const {NativeModules} = require('react-native');
+NativeModules.UpiIntentModule = {
+  pay: jest.fn(async () => ({cancelled: true, raw: ''})),
+  hasCompatibleApp: jest.fn(async () => true),
+};
+
 jest.mock('react-native-toast-message', () => {
   const Toast = () => null;
   Toast.show = jest.fn();

@@ -1,3 +1,5 @@
+import type {UpiIntentStatus} from './upi/model/types';
+
 export type PaymentStatus =
   | 'draft'
   | 'order_created'
@@ -6,7 +8,8 @@ export type PaymentStatus =
   | 'payment_captured'
   | 'payment_failed'
   | 'payment_abandoned'
-  | 'legacy_simulated';
+  | 'legacy_simulated'
+  | UpiIntentStatus;
 
 export type TransactionStatus =
   | 'Recorded'
@@ -32,6 +35,8 @@ export type MerchantData = {
   category: string;
   mcc: string;
   amount?: number;
+  amountPaise?: number;
+  note?: string;
 };
 
 export type Receipt = {
@@ -76,6 +81,12 @@ export type Transaction = {
   paymentMethod?: string;
   paymentFailedReason?: string;
   paymentConfirmedAt?: string;
+  amountPaise?: number;
+  paymentId?: string;
+  upiTxnRef?: string;
+  approvalRefNo?: string;
+  upiResponseCode?: string;
+  expenseSource?: string;
 };
 
 export type OnboardingProfile = {

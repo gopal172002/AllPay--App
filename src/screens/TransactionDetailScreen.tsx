@@ -24,6 +24,8 @@ import {RootStackParamList} from '../navigation';
 import {Receipt} from '../types';
 import {isPaymentCaptured} from '../services/payments';
 import {toast} from '../utils/toast';
+import {maskRef, maskVpa} from '../upi/mask';
+import {paiseToRupeeLabel} from '../upi/money';
 
 type Route = RouteProp<RootStackParamList, 'TransactionDetail'>;
 
@@ -54,8 +56,10 @@ export const TransactionDetailScreen = () => {
   const route = useRoute<Route>();
   const {
     transactions,
+    upiPayments,
     submitForReimbursement,
     addReceipts,
+    applyUpiPaymentStatus,
   } = useAppData();
   const tx = useMemo(
     () => transactions.find(item => item.id === route.params.transactionId),
@@ -74,6 +78,14 @@ export const TransactionDetailScreen = () => {
     );
   }
 
+  const linkedPayment = tx.paymentId
+    ? upiPayments.find(item => item.id === tx.paymentId)
+    : undefined;
+  const unresolvedUpi =
+    tx.paymentStatus === 'UNKNOWN' ||
+    tx.paymentStatus === 'PENDING' ||
+    linkedPayment?.status === 'UNKNOWN' ||
+    linkedPayment?.status === 'PENDING';
   const canAttach = isWithin48Hours(tx.timestamp) && tx.receipts.length < 3;
   const paymentReady = isPaymentCaptured(tx.paymentStatus);
   const canSubmit =
@@ -125,12 +137,29 @@ export const TransactionDetailScreen = () => {
 
         <Section title="Payment details">
           <DetailRow label="Merchant" value={tx.merchant.name} />
+          <DetailRow
+            label="UPI ID"
+            value={tx.merchant.vpa ? maskVpa(tx.merchant.vpa) : '--'}
+          />
           <DetailRow label="MCC" value={tx.merchant.mcc} />
-          <DetailRow label="UPI Ref ID" value={tx.upiRefId ?? '--'} />
-          <DetailRow label="Payment" value={tx.paymentStatus ?? 'Not started'} />
-          <DetailRow label="Amount" value={`INR ${tx.amount.toFixed(2)}`} />
-          <DetailRow label="UPI App" value={tx.upiApp} />
+          <DetailRow
+            label="Amount"
+            value={
+              tx.amountPaise != null
+                ? `₹${paiseToRupeeLabel(tx.amountPaise)}`
+                : `INR ${tx.amount.toFixed(2)}`
+            }
+          />
+          <DetailRow label="Method" value={tx.paymentMethod === 'UPI_INTENT' ? 'UPI' : tx.upiApp} />
+          <DetailRow label="Status" value={tx.paymentStatus ?? 'Not started'} />
+          <DetailRow label="Reference" value={maskRef(tx.upiRefId ?? tx.upiTxnRef)} />
           <DetailRow label="Sync" value={tx.syncStatus} />
+          {tx.paymentMethod === 'UPI_INTENT' ? (
+            <Text style={styles.helpText}>
+              SUCCESS_REPORTED means the UPI app returned success. Expenzo did not
+              independently verify settlement with the bank.
+            </Text>
+          ) : null}
           <DetailRow
             label="Location"
             value={
@@ -140,6 +169,19 @@ export const TransactionDetailScreen = () => {
             }
           />
         </Section>
+
+        {unresolvedUpi && tx.paymentId ? (
+          <Section title="Couldn't determine payment status">
+            <Text style={styles.helpText}>
+              We couldn't determine the result of this UPI payment. Recording
+              manually is not the same as a successful UPI callback.
+            </Text>
+            <SecondaryButton
+              label="Record expense"
+              onPress={() => applyUpiPaymentStatus(tx.paymentId as string, 'USER_CONFIRMED')}
+            />
+          </Section>
+        ) : null}
 
         <Section title="Receipts (max 3, within 48h)">
           <View style={styles.thumbWrap}>

@@ -4,5 +4,6 @@ export type RootStackParamList = {
   MainTabs: undefined;
   Scan: undefined;
   Payment: {merchant: MerchantData};
+  PaymentResult: {paymentId: string};
   TransactionDetail: {transactionId: string};
 };

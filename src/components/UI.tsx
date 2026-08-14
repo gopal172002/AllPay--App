@@ -11,13 +11,26 @@ import {SafeAreaView} from 'react-native-safe-area-context';
 import type {Edge} from 'react-native-safe-area-context';
 
 const statusTone = (status: string): {bg: string; fg: string; border: string} => {
-  if (status === 'Approved') {
+  if (status === 'Approved' || status === 'SUCCESS_REPORTED') {
     return {bg: '#ecfdf5', fg: '#047857', border: '#bbf7d0'};
   }
-  if (status === 'Rejected' || status === 'Abandoned') {
+  if (
+    status === 'Rejected' ||
+    status === 'Abandoned' ||
+    status === 'FAILED' ||
+    status === 'CANCELLED'
+  ) {
     return {bg: '#fef2f2', fg: '#b91c1c', border: '#fecaca'};
   }
-  if (status === 'Pending Approval' || status === 'Flagged') {
+  if (
+    status === 'Pending Approval' ||
+    status === 'Flagged' ||
+    status === 'PENDING' ||
+    status === 'UNKNOWN' ||
+    status === 'USER_CONFIRMED' ||
+    status === 'INITIATED' ||
+    status === 'UPI_APP_OPENED'
+  ) {
     return {bg: '#fffbeb', fg: '#b45309', border: '#fde68a'};
   }
   return {bg: '#eff6ff', fg: '#1d4ed8', border: '#bfdbfe'};
@@ -271,7 +284,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 5,
     borderRadius: 999,
-    maxWidth: 148,
+    maxWidth: 220,
   },
   pillText: {
     fontSize: 12,

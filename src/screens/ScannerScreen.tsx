@@ -21,8 +21,10 @@ import {
   SecondaryButton,
 } from '../components/UI';
 import {RootStackParamList} from '../navigation';
-import {parseUpiQr} from '../utils/upi';
+import {merchantFromUpiQr} from '../utils/upi';
 import {toast} from '../utils/toast';
+import {trackUpiEvent} from '../upi/analytics';
+import {parseUpiQr as parseValidatedUpiQr} from '../upi/scanner/UpiQrParser';
 
 type Nav = NativeStackNavigationProp<RootStackParamList>;
 type R = RouteProp<RootStackParamList, 'Scan'>;
@@ -43,6 +45,7 @@ export const ScannerScreen = () => {
     useCallback(() => {
       handledValue.current = null;
       lastScanAt.current = 0;
+      trackUpiEvent('upi_scan_started');
     }, []),
   );
 
@@ -94,22 +97,24 @@ export const ScannerScreen = () => {
         return;
       }
       lastScanAt.current = now;
-      const merchant = parseUpiQr(trimmed);
-      if (!merchant) {
-        toast.error('Invalid QR', 'This is not a valid UPI payment QR. Keep scanning or paste a link below.');
+      const validated = parseValidatedUpiQr(trimmed);
+      if (!validated.ok) {
+        if (handledValue.current !== trimmed) {
+          handledValue.current = trimmed;
+          trackUpiEvent('upi_qr_invalid');
+          toast.error('Invalid QR', `${validated.message} [${validated.code}]`);
+        }
         return;
       }
+      trackUpiEvent('upi_qr_scanned');
       handledValue.current = trimmed;
-      navigation.navigate('Payment', {merchant});
+      navigation.navigate('Payment', {merchant: merchantFromUpiQr(validated)});
     },
     [navigation],
   );
 
   const handleManual = () => {
     onQrValue(rawManual);
-    if (parseUpiQr(rawManual.trim())) {
-      return;
-    }
   };
 
   return (
@@ -118,8 +123,8 @@ export const ScannerScreen = () => {
         contentContainerStyle={styles.container}
         keyboardShouldPersistTaps="handled">
         <ScreenHeader
-          title="Scan merchant QR"
-          subtitle="Point the camera at the merchant UPI QR. Works best in good light."
+          title="Scan & Pay"
+          subtitle="Point the camera at a UPI QR. Payment opens only after you confirm."
         />
 
         <View style={styles.cameraWrap}>

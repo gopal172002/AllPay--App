@@ -1,9 +1,11 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {OnboardingProfile, Transaction} from '../types';
+import type {UpiIntentPayment} from '../upi/model/types';
 
 const KEYS = {
   profile: 'allpay.profile',
   transactions: 'allpay.transactions',
+  upiPayments: 'allpay.upiPayments',
   defaultUpiAppId: 'allpay.defaultUpiAppId',
   locationEnabled: 'allpay.locationEnabled',
 };
@@ -27,6 +29,15 @@ export const storage = {
     return raw ? (JSON.parse(raw) as Transaction[]) : [];
   },
 
+  async saveUpiPayments(items: UpiIntentPayment[]): Promise<void> {
+    await AsyncStorage.setItem(KEYS.upiPayments, JSON.stringify(items));
+  },
+
+  async getUpiPayments(): Promise<UpiIntentPayment[]> {
+    const raw = await AsyncStorage.getItem(KEYS.upiPayments);
+    return raw ? (JSON.parse(raw) as UpiIntentPayment[]) : [];
+  },
+
   async setDefaultUpiAppId(id: string): Promise<void> {
     await AsyncStorage.setItem(KEYS.defaultUpiAppId, id);
   },
@@ -48,6 +59,7 @@ export const storage = {
     await AsyncStorage.multiRemove([
       KEYS.profile,
       KEYS.transactions,
+      KEYS.upiPayments,
       KEYS.defaultUpiAppId,
       KEYS.locationEnabled,
     ]);
