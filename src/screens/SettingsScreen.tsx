@@ -1,5 +1,5 @@
 import React from 'react';
-import {Alert, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
+import {Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View} from 'react-native';
 import {Screen, ScreenHeader, SecondaryButton, Section} from '../components/UI';
 import {useAppData} from '../context/AppContext';
 import {toast} from '../utils/toast';
@@ -10,6 +10,8 @@ export const SettingsScreen = () => {
     locationEnabled,
     setLocationCaptureEnabled,
     installedUpiApps,
+    defaultUpiAppId,
+    setDefaultUpiApp,
     refreshInstalledUpiApps,
     logout,
   } = useAppData();
@@ -73,16 +75,30 @@ export const SettingsScreen = () => {
           </Text>
         </Section>
 
-        <Section title="Detected UPI apps">
+        <Section title="Preferred UPI app">
+          <Text style={styles.helpText}>
+            On iPhone, payments open this app (not WhatsApp). Tap to set default.
+          </Text>
           {installedUpiApps.length === 0 ? (
             <Text style={styles.helpText}>No installed UPI app detected.</Text>
           ) : (
-            installedUpiApps.map(item => (
-              <View key={item.id} style={styles.appRow}>
-                <Text style={styles.appLogo}>{item.logo}</Text>
-                <Text style={styles.item}>{item.name}</Text>
-              </View>
-            ))
+            installedUpiApps.map(item => {
+              const selected = defaultUpiAppId === item.id;
+              return (
+                <Pressable
+                  key={item.id}
+                  style={[styles.appRow, selected ? styles.appRowSelected : null]}
+                  onPress={() => {
+                    setDefaultUpiApp(item.id)
+                      .then(() => toast.success('Default UPI app', item.name))
+                      .catch(() => null);
+                  }}>
+                  <Text style={styles.appLogo}>{item.logo}</Text>
+                  <Text style={styles.item}>{item.name}</Text>
+                  {selected ? <Text style={styles.defaultBadge}>Default</Text> : null}
+                </Pressable>
+              );
+            })
           )}
           <SecondaryButton label="Refresh installed UPI apps" onPress={refreshInstalledUpiApps} />
         </Section>
@@ -131,6 +147,7 @@ const styles = StyleSheet.create({
   helpText: {
     color: '#64748b',
     marginTop: 8,
+    marginBottom: 8,
     lineHeight: 20,
   },
   appRow: {
@@ -142,6 +159,10 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 10,
     backgroundColor: '#ffffff',
+  },
+  appRowSelected: {
+    borderColor: '#1557d5',
+    backgroundColor: '#eff6ff',
   },
   appLogo: {
     width: 28,
@@ -160,6 +181,12 @@ const styles = StyleSheet.create({
   item: {
     color: '#0f172a',
     fontWeight: '800',
+    flex: 1,
+  },
+  defaultBadge: {
+    color: '#1557d5',
+    fontWeight: '800',
+    fontSize: 12,
   },
   profileBox: {
     borderWidth: 1,

@@ -8,6 +8,8 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import {Platform} from 'react-native';
+import {KNOWN_UPI_APPS} from '../constants/mockData';
 import {toast} from '../utils/toast';
 import {detectInstalledUpiApps} from '../services/upiApps';
 import {storage} from '../services/storage';
@@ -19,6 +21,7 @@ import type {ExpensePolicy} from '../utils/policies';
 import type {UpiIntentPayment, UpiIntentStatus} from '../upi/model/types';
 import {createUuid, launchTxnRefFromPaymentId} from '../upi/id';
 import {expenseFromPayment} from '../upi/payment/expenseFromPayment';
+import {detectIosPaymentUpiApps} from '../upi/payment/UpiPaymentLauncher';
 import {
   applyUpiStatusTransition,
   recoverUnresolvedStatus,
@@ -281,7 +284,15 @@ export const AppProvider = ({children}: {children: React.ReactNode}) => {
   }, []);
 
   const refreshInstalledUpiApps = useCallback(async () => {
-    const apps = await detectInstalledUpiApps();
+    let apps: UpiApp[];
+    if (Platform.OS === 'ios') {
+      const iosApps = await detectIosPaymentUpiApps();
+      apps = iosApps
+        .map(item => KNOWN_UPI_APPS.find(app => app.id === item.id))
+        .filter((app): app is UpiApp => Boolean(app));
+    } else {
+      apps = await detectInstalledUpiApps();
+    }
     setInstalledUpiApps(apps);
     if (apps.length === 1) {
       await storage.setDefaultUpiAppId(apps[0].id);

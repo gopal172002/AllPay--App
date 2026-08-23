@@ -1,7 +1,7 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import React, {useState} from 'react';
-import {Alert, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -17,7 +17,11 @@ import {toast} from '../utils/toast';
 import {trackUpiEvent} from '../upi/analytics';
 import {isSaneAmountPaise, paiseToRupeeLabel, parseRupeeInputToPaise} from '../upi/money';
 import {buildUpiPayUri} from '../upi/scanner/UpiQrParser';
-import {hasCompatibleUpiApp, launchUpiIntent} from '../upi/payment/UpiPaymentLauncher';
+import {
+  detectIosPaymentUpiApps,
+  hasCompatibleUpiApp,
+  launchUpiIntent,
+} from '../upi/payment/UpiPaymentLauncher';
 import {
   mapUpiResultToStatus,
   parseUpiPaymentResult,
@@ -35,6 +39,38 @@ const DetailRow = ({label, value}: {label: string; value: string}) => (
   </View>
 );
 
+function pickIosUpiApp(
+  apps: Array<{id: string; name: string}>,
+  preferredId: string | null,
+): Promise<string | null> {
+  if (apps.length === 0) {
+    return Promise.resolve(null);
+  }
+  if (apps.length === 1) {
+    return Promise.resolve(apps[0].id);
+  }
+  return new Promise(resolve => {
+    const preferred = preferredId
+      ? apps.find(app => app.id === preferredId)
+      : undefined;
+    const ordered = preferred
+      ? [preferred, ...apps.filter(app => app.id !== preferred.id)]
+      : apps;
+    Alert.alert(
+      'Pay with',
+      'Choose a UPI app (WhatsApp is not used for expense payments).',
+      [
+        ...ordered.map(app => ({
+          text: app.name,
+          onPress: () => resolve(app.id),
+        })),
+        {text: 'Cancel', style: 'cancel' as const, onPress: () => resolve(null)},
+      ],
+      {cancelable: true, onDismiss: () => resolve(null)},
+    );
+  });
+}
+
 export const PaymentScreen = () => {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
@@ -43,6 +79,7 @@ export const PaymentScreen = () => {
     profile,
     policies,
     transactions,
+    defaultUpiAppId,
     createUpiPayment,
     markUpiAppOpened,
     applyUpiPaymentStatus,
@@ -91,10 +128,40 @@ export const PaymentScreen = () => {
         return;
       }
 
+      let preferredAppId = defaultUpiAppId;
+      if (Platform.OS === 'ios') {
+        const iosApps = await detectIosPaymentUpiApps();
+        const defaultAvailable =
+          defaultUpiAppId && iosApps.some(app => app.id === defaultUpiAppId);
+        if (defaultAvailable) {
+          preferredAppId = defaultUpiAppId;
+        } else {
+          const chosen = await pickIosUpiApp(iosApps, defaultUpiAppId);
+          if (!chosen) {
+            await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+            trackUpiEvent('upi_result_cancelled');
+            navigation.replace('PaymentResult', {paymentId: payment.id});
+            return;
+          }
+          preferredAppId = chosen;
+        }
+      }
+
+      const appLabel =
+        preferredAppId === 'paytm'
+          ? 'Paytm'
+          : preferredAppId === 'phonepe'
+            ? 'PhonePe'
+            : preferredAppId === 'gpay'
+              ? 'Google Pay'
+              : preferredAppId === 'bhim'
+                ? 'BHIM'
+                : 'UPI app';
+
       await markUpiAppOpened(payment.id);
-      setStatusMessage('Opening UPI app...');
+      setStatusMessage(`Opening ${appLabel}…`);
       trackUpiEvent('upi_app_launched');
-      const launch = await launchUpiIntent(uri);
+      const launch = await launchUpiIntent(uri, {preferredAppId});
 
       if (launch.kind === 'no_app') {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
@@ -234,9 +301,9 @@ export const PaymentScreen = () => {
         </Section>
 
         <Text style={styles.disclaimer}>
-          You will choose PhonePe, Google Pay, Paytm, BHIM, or a bank UPI app next.
-          Enter your UPI PIN only inside that app. On iPhone, confirm the expense
-          with “I paid — record expense” after you return.
+          On iPhone, choose Paytm, PhonePe, Google Pay, or BHIM — WhatsApp is not
+          used. Enter your UPI PIN only inside that app. After you return, tap
+          “I paid — record expense”.
         </Text>
 
         <PrimaryButton
