@@ -11,7 +11,7 @@ on:
 jobs:
   build-ipa:
     name: Build AllPay Employee IPA
-    runs-on: macos-14
+    runs-on: macos-latest
     timeout-minutes: 60
 
     steps:
@@ -27,18 +27,18 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.2'
-          bundler-cache: true
-
       - name: Install CocoaPods
-        working-directory: ios
-        run: bundle exec pod install
+        env:
+          RCT_NEW_ARCH_ENABLED: '0'
+        run: |
+          gem install cocoapods -v 1.16.2 --no-document
+          cd ios
+          pod install --repo-update
 
       - name: Build release archive (unsigned)
         working-directory: ios
+        env:
+          RCT_NEW_ARCH_ENABLED: '0'
         run: |
           xcodebuild \
             -workspace AllpayEmployeeApp.xcworkspace \
