@@ -15,14 +15,17 @@ export function merchantFromUpiQr(parsed: UpiQrParseOk): MerchantData {
   const amountRupees = parsed.amountPaise
     ? Number(paiseToRupeeLabel(parsed.amountPaise))
     : undefined;
+  const category = parsed.category;
   return {
     vpa: parsed.payeeVpa,
     name: parsed.payeeName,
-    category: parsed.category,
-    mcc: parsed.merchantCategoryCode ?? MCC_MAP[parsed.category] ?? '5999',
+    category,
+    mcc: parsed.merchantCategoryCode ?? MCC_MAP[category] ?? '0000',
     ...(amountRupees !== undefined ? {amount: amountRupees} : {}),
     ...(parsed.amountPaise !== undefined ? {amountPaise: parsed.amountPaise} : {}),
     ...(parsed.note ? {note: parsed.note} : {}),
+    ...(parsed.transactionReference ? {qrTransactionRef: parsed.transactionReference} : {}),
+    ...(parsed.merchantCategoryCode ? {merchantCategoryCode: parsed.merchantCategoryCode} : {}),
   };
 }
 

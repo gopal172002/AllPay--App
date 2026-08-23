@@ -1,4 +1,4 @@
-import {parseUpiQr} from '../../src/upi/scanner/UpiQrParser';
+import {buildUpiPayUri, parseUpiQr} from '../../src/upi/scanner/UpiQrParser';
 
 describe('UpiQrParser', () => {
   it('parses a valid merchant QR with amount', () => {
@@ -159,5 +159,32 @@ describe('UpiQrParser', () => {
       expect(result.sanitizedUri).not.toContain('foo=');
       expect(result.category).toBe('food');
     }
+  });
+});
+
+describe('buildUpiPayUri', () => {
+  it('builds minimal P2P intent without app-generated tr or mc', () => {
+    const uri = buildUpiPayUri({
+      payeeVpa: '9174991503-2@ibl',
+      payeeName: 'Krishna Chand Patidar',
+      amountPaise: 200,
+    });
+    expect(uri).toContain('pa=9174991503-2%40ibl');
+    expect(uri).toContain('am=2.00');
+    expect(uri).toContain('cu=INR');
+    expect(uri).not.toContain('tr=');
+    expect(uri).not.toContain('mc=');
+  });
+
+  it('keeps merchant tr and mc only when supplied from the QR', () => {
+    const uri = buildUpiPayUri({
+      payeeVpa: 'merchant@upi',
+      payeeName: 'ABC Store',
+      amountPaise: 50000,
+      merchantTransactionRef: 'ORD12345',
+      merchantCategoryCode: '5812',
+    });
+    expect(uri).toContain('tr=ORD12345');
+    expect(uri).toContain('mc=5812');
   });
 });

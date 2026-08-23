@@ -37,6 +37,10 @@ export type MerchantData = {
   amount?: number;
   amountPaise?: number;
   note?: string;
+  /** Original `tr` from a merchant QR — never app-generated. */
+  qrTransactionRef?: string;
+  /** Original `mc` from QR — omit on P2P intents unless the QR had it. */
+  merchantCategoryCode?: string;
 };
 
 export type Receipt = {

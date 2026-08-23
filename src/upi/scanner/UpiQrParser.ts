@@ -323,20 +323,30 @@ export function buildUpiPayUri(input: {
   payeeName: string;
   amountPaise: number;
   note?: string;
-  transactionReference: string;
+  /** Only the QR's own `tr` for registered merchants — never app-generated refs. */
+  merchantTransactionRef?: string;
+  /** Only when the scanned QR included `mc`. */
+  merchantCategoryCode?: string;
 }): string {
   const rupees = Math.floor(input.amountPaise / 100);
   const paise = input.amountPaise % 100;
   const am = `${rupees}.${String(paise).padStart(2, '0')}`;
   const search = new URLSearchParams({
-    pa: input.payeeVpa,
-    pn: input.payeeName.slice(0, MAX_NAME),
+    pa: input.payeeVpa.trim(),
+    pn: input.payeeName.trim().slice(0, MAX_NAME),
     am,
     cu: 'INR',
-    tr: input.transactionReference.slice(0, MAX_TR),
   });
   if (input.note?.trim()) {
     search.set('tn', input.note.trim().slice(0, MAX_NOTE));
+  }
+  const qrTr = input.merchantTransactionRef?.trim();
+  if (qrTr) {
+    search.set('tr', qrTr.slice(0, MAX_TR));
+  }
+  const qrMc = input.merchantCategoryCode?.trim();
+  if (qrMc && qrMc !== '0000') {
+    search.set('mc', qrMc.slice(0, 4));
   }
   return `upi://pay?${search.toString()}`;
 }

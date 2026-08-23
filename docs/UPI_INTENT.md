@@ -56,9 +56,8 @@ If Expenzo is killed while the UPI app is open, in-flight payments become `UNKNO
 - Some apps return empty extras → `UNKNOWN`
 - Android may kill Expenzo while the user is in the UPI app
 - There is no official public NPCI inquiry API for arbitrary third-party apps
-- **iOS** opens `upi://pay` via `Linking.openURL` (no Activity Result). After the UPI app
-  opens, status stays `UPI_APP_OPENED` until the user taps **I paid — record expense**
-  (`USER_CONFIRMED`). Auto `SUCCESS_REPORTED` is Android-only.
+- **iOS** opens `upi://pay` via app-specific deep links (Paytm / PhonePe / GPay / BHIM) — never WhatsApp via bare `upi://`
+- **Do not inject app-generated `tr`** into P2P UPI intents; NPCI risk policy rejects unknown merchant refs. Internal tracking uses `launchTxnRef` in Expenzo only.
 
 ## Real-device tests before production
 

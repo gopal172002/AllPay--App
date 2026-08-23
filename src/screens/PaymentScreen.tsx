@@ -114,7 +114,8 @@ export const PaymentScreen = () => {
         payeeName: merchant.name,
         amountPaise: parsedPaise,
         note: merchant.note,
-        transactionReference: payment.launchTxnRef,
+        merchantTransactionRef: merchant.qrTransactionRef,
+        merchantCategoryCode: merchant.merchantCategoryCode,
       });
 
       const hasApp = await hasCompatibleUpiApp(uri);
@@ -184,7 +185,7 @@ export const PaymentScreen = () => {
         );
       } else {
         const parsed = parseUpiPaymentResult(launch.raw);
-        const mapped = mapUpiResultToStatus(parsed, payment.launchTxnRef);
+        const mapped = mapUpiResultToStatus(parsed, merchant.qrTransactionRef);
         await applyUpiPaymentStatus(payment.id, mapped, {
           upiTxnId: parsed.transactionId ?? undefined,
           upiTxnRef: parsed.transactionReference ?? undefined,
