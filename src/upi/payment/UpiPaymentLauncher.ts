@@ -18,7 +18,8 @@ type UpiIntentNative = {
 
 const native = NativeModules.UpiIntentModule as UpiIntentNative | undefined;
 
-const IOS_UPI_APP_ORDER = ['phonepe', 'gpay', 'paytm', 'bhim'] as const;
+/** Never open bare upi:// — WhatsApp steals it on iOS and appears in Android choosers. */
+const IOS_UPI_APP_ORDER = ['paytm', 'phonepe', 'gpay', 'bhim'] as const;
 
 const IOS_SCHEME_PREFIX: Record<(typeof IOS_UPI_APP_ORDER)[number], string[]> = {
   paytm: ['paytmmp://upi/pay', 'paytm://upi/pay'],
@@ -42,8 +43,8 @@ export type UpiLaunchResult =
   | {kind: 'unsupported'};
 
 export type UpiLaunchOptions = {
+  /** Preferred app id: paytm | phonepe | gpay | bhim */
   preferredAppId?: string | null;
-  /** Personal P2P — prefer bare upi:// and minimal app-scheme payloads. */
   personalP2p?: boolean;
 };
 
@@ -71,10 +72,6 @@ async function canOpenScheme(url: string): Promise<boolean> {
   }
 }
 
-async function isWhatsAppInstalled(): Promise<boolean> {
-  return canOpenScheme('whatsapp://send');
-}
-
 export async function detectIosPaymentUpiApps(): Promise<
   Array<{id: string; name: string}>
 > {
@@ -98,17 +95,7 @@ export async function detectIosPaymentUpiApps(): Promise<
 
 async function hasCompatibleUpiAppIos(): Promise<boolean> {
   const apps = await detectIosPaymentUpiApps();
-  if (apps.length > 0) {
-    return true;
-  }
-  try {
-    const apps = await detectInstalledUpiApps();
-    return apps.some(app =>
-      IOS_UPI_APP_ORDER.includes(app.id as (typeof IOS_UPI_APP_ORDER)[number]),
-    );
-  } catch {
-    return false;
-  }
+  return apps.length > 0;
 }
 
 async function launchUpiIntentIos(
@@ -125,26 +112,10 @@ async function launchUpiIntentIos(
     return {kind: 'no_app'};
   }
 
-  const whatsapp = await isWhatsAppInstalled();
-  const preferred = options?.preferredAppId?.toLowerCase() ?? null;
-
-  // NPCI proxy utility: relay exact upi:// when WhatsApp won't steal the link.
-  if (!whatsapp) {
-    try {
-      await Linking.openURL(upiUri);
-      return {kind: 'opened'};
-    } catch {
-      // fall through to app schemes
-    }
-  }
-
+  const preferred = options?.preferredAppId?.toLowerCase() ?? 'paytm';
   const orderedIds = [
-    ...(preferred &&
-    IOS_UPI_APP_ORDER.includes(preferred as (typeof IOS_UPI_APP_ORDER)[number])
+    ...(IOS_UPI_APP_ORDER.includes(preferred as (typeof IOS_UPI_APP_ORDER)[number])
       ? [preferred]
-      : []),
-    ...(options?.personalP2p
-      ? (['phonepe', 'gpay'] as const).filter(id => id !== preferred)
       : []),
     ...IOS_UPI_APP_ORDER.filter(id => id !== preferred),
   ].filter((id, index, arr) => arr.indexOf(id) === index)
@@ -236,8 +207,8 @@ export async function openUpiAppHome(
 }
 
 /**
- * Launch pay-to-payee. Android uses standard upi:// + optional package target.
- * iOS uses bare upi:// when safe, else PSP app schemes with the same query string.
+ * Launch pay-to-payee directly in Paytm / PhonePe / GPay / BHIM.
+ * Never uses bare upi:// (WhatsApp intercepts that).
  */
 export async function launchUpiIntent(
   upiUri: string,
@@ -251,13 +222,8 @@ export async function launchUpiIntent(
     return {kind: 'unsupported'};
   }
 
-  const preferred = options?.preferredAppId?.toLowerCase() ?? null;
-  let packageName: string | null = null;
-  if (preferred && ANDROID_PACKAGE[preferred]) {
-    packageName = ANDROID_PACKAGE[preferred];
-  } else if (options?.personalP2p) {
-    packageName = ANDROID_PACKAGE.phonepe;
-  }
+  const preferred = options?.preferredAppId?.toLowerCase() ?? 'paytm';
+  const packageName = ANDROID_PACKAGE[preferred] ?? ANDROID_PACKAGE.paytm;
 
   try {
     const result = await native.pay(upiUri, packageName);
@@ -265,16 +231,6 @@ export async function launchUpiIntent(
       return {kind: 'unsupported'};
     }
     if (result.noApp) {
-      if (packageName) {
-        const fallback = await native.pay(upiUri, null);
-        if (fallback.noApp) {
-          return {kind: 'no_app'};
-        }
-        if (fallback.cancelled) {
-          return {kind: 'cancelled'};
-        }
-        return {kind: 'callback', raw: fallback.raw ?? ''};
-      }
       return {kind: 'no_app'};
     }
     if (result.cancelled) {

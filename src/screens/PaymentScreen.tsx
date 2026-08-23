@@ -175,8 +175,8 @@ export const PaymentScreen = () => {
         defaultUpiAppId && installedApps.some(app => app.id === defaultUpiAppId);
       if (defaultAvailable) {
         preferredAppId = defaultUpiAppId;
-      } else if (personalP2p && installedApps.some(app => app.id === 'phonepe')) {
-        preferredAppId = 'phonepe';
+      } else if (installedApps.some(app => app.id === 'paytm')) {
+        preferredAppId = 'paytm';
       } else if (installedApps.length > 1) {
         const chosen = await pickUpiApp(installedApps, defaultUpiAppId);
         if (!chosen) {
