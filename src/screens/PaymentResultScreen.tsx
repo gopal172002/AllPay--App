@@ -64,7 +64,7 @@ export const PaymentResultScreen = () => {
     status === 'SUCCESS_REPORTED'
       ? 'UPI payment reported successful'
       : status === 'FAILED'
-        ? 'No expense was added.'
+        ? 'Bank or UPI app declined this payment (often “UPI risk policy” on personal IDs). No expense was added. Try PhonePe/Google Pay or scan the payment QR on the confirm screen.'
         : status === 'PENDING'
           ? 'The UPI app reported that this transaction is still pending. Do not pay again unless you know the first payment failed.'
           : status === 'CANCELLED'
@@ -72,7 +72,7 @@ export const PaymentResultScreen = () => {
             : status === 'USER_CONFIRMED'
               ? 'You confirmed this payment. This is not a UPI app success callback.'
               : status === 'UPI_APP_OPENED'
-                ? 'UPI ID was copied and your UPI app was opened. Pay there like a normal transfer (do not use auto-fill links — banks block those). Then tap I paid — record expense.'
+                ? 'Your UPI app was opened. Complete payment there, then return and tap I paid — record expense if money was sent.'
                 : "We couldn't determine the result of this payment. If you already paid, tap Record manually.";
 
   const toneStyle =

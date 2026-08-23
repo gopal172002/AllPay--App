@@ -18,13 +18,8 @@ type UpiIntentNative = {
 
 const native = NativeModules.UpiIntentModule as UpiIntentNative | undefined;
 
-/** Preferred payment apps — never open bare upi:// first (WhatsApp steals it on iOS). */
-const IOS_UPI_APP_ORDER = ['paytm', 'phonepe', 'gpay', 'bhim'] as const;
+const IOS_UPI_APP_ORDER = ['phonepe', 'gpay', 'paytm', 'bhim'] as const;
 
-/**
- * Official PSP deep-link prefixes (Juspay / NPCI iOS package list).
- * Paytm MUST be paytmmp://upi/pay — paytmmp://pay is a different (non-UPI) path.
- */
 const IOS_SCHEME_PREFIX: Record<(typeof IOS_UPI_APP_ORDER)[number], string[]> = {
   paytm: ['paytmmp://upi/pay', 'paytm://upi/pay'],
   phonepe: ['phonepe://pay', 'phonepe://upi/pay'],
@@ -47,8 +42,9 @@ export type UpiLaunchResult =
   | {kind: 'unsupported'};
 
 export type UpiLaunchOptions = {
-  /** Preferred app id: paytm | phonepe | gpay | bhim (iOS only — Android uses OS chooser). */
   preferredAppId?: string | null;
+  /** Personal P2P — prefer bare upi:// and minimal app-scheme payloads. */
+  personalP2p?: boolean;
 };
 
 function assertSafeUpiUri(upiUri: string): void {
@@ -75,9 +71,10 @@ async function canOpenScheme(url: string): Promise<boolean> {
   }
 }
 
-/**
- * Detect installed payment UPI apps on iOS (excludes WhatsApp / generic upi://).
- */
+async function isWhatsAppInstalled(): Promise<boolean> {
+  return canOpenScheme('whatsapp://send');
+}
+
 export async function detectIosPaymentUpiApps(): Promise<
   Array<{id: string; name: string}>
 > {
@@ -128,14 +125,30 @@ async function launchUpiIntentIos(
     return {kind: 'no_app'};
   }
 
+  const whatsapp = await isWhatsAppInstalled();
   const preferred = options?.preferredAppId?.toLowerCase() ?? null;
+
+  // NPCI proxy utility: relay exact upi:// when WhatsApp won't steal the link.
+  if (!whatsapp) {
+    try {
+      await Linking.openURL(upiUri);
+      return {kind: 'opened'};
+    } catch {
+      // fall through to app schemes
+    }
+  }
+
   const orderedIds = [
     ...(preferred &&
     IOS_UPI_APP_ORDER.includes(preferred as (typeof IOS_UPI_APP_ORDER)[number])
       ? [preferred]
       : []),
+    ...(options?.personalP2p
+      ? (['phonepe', 'gpay'] as const).filter(id => id !== preferred)
+      : []),
     ...IOS_UPI_APP_ORDER.filter(id => id !== preferred),
-  ].filter(id => installed.some(app => app.id === id));
+  ].filter((id, index, arr) => arr.indexOf(id) === index)
+    .filter(id => installed.some(app => app.id === id));
 
   for (const id of orderedIds) {
     const prefixes = IOS_SCHEME_PREFIX[id as (typeof IOS_UPI_APP_ORDER)[number]];
@@ -178,7 +191,6 @@ const ANDROID_PACKAGE: Record<string, string> = {
   bhim: 'in.org.npci.upiapp',
 };
 
-/** Open a UPI app home screen (no payment URI). Used only as a fallback helper. */
 export async function openUpiAppHome(
   appId: string | null | undefined,
 ): Promise<UpiLaunchResult> {
@@ -224,12 +236,8 @@ export async function openUpiAppHome(
 }
 
 /**
- * Launch pay-to-payee via NPCI UPI deep link (shopping-style redirect).
- *
- * Android: generic `upi://pay?...` ACTION_VIEW + system chooser (NPCI proxy utility).
- * iOS: app-specific UPI schemes (bare upi:// is often stolen by WhatsApp).
- *
- * Never invent mode/orgid/sign — URI must come from buildUpiPayUri / scanned QR.
+ * Launch pay-to-payee. Android uses standard upi:// + optional package target.
+ * iOS uses bare upi:// when safe, else PSP app schemes with the same query string.
  */
 export async function launchUpiIntent(
   upiUri: string,
@@ -242,13 +250,31 @@ export async function launchUpiIntent(
   if (Platform.OS !== 'android' || !native?.pay) {
     return {kind: 'unsupported'};
   }
+
+  const preferred = options?.preferredAppId?.toLowerCase() ?? null;
+  let packageName: string | null = null;
+  if (preferred && ANDROID_PACKAGE[preferred]) {
+    packageName = ANDROID_PACKAGE[preferred];
+  } else if (options?.personalP2p) {
+    packageName = ANDROID_PACKAGE.phonepe;
+  }
+
   try {
-    // Always null package — native module uses OS chooser for NPCI-compatible initiation.
-    const result = await native.pay(upiUri, null);
+    const result = await native.pay(upiUri, packageName);
     if (result.unsupported) {
       return {kind: 'unsupported'};
     }
     if (result.noApp) {
+      if (packageName) {
+        const fallback = await native.pay(upiUri, null);
+        if (fallback.noApp) {
+          return {kind: 'no_app'};
+        }
+        if (fallback.cancelled) {
+          return {kind: 'cancelled'};
+        }
+        return {kind: 'callback', raw: fallback.raw ?? ''};
+      }
       return {kind: 'no_app'};
     }
     if (result.cancelled) {
@@ -258,4 +284,8 @@ export async function launchUpiIntent(
   } catch {
     return {kind: 'callback', raw: ''};
   }
+}
+
+export function upiQrImageUrl(upiUri: string, size = 240): string {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(upiUri)}`;
 }

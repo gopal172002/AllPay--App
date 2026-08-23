@@ -163,18 +163,27 @@ describe('UpiQrParser', () => {
 });
 
 describe('buildUpiPayUri', () => {
-  it('builds minimal P2P intent without app-generated tr or mc', () => {
+  it('builds minimal P2P intent without pn when name matches VPA local part', () => {
+    const uri = buildUpiPayUri({
+      payeeVpa: '9174991503-2@ibl',
+      payeeName: '9174991503-2',
+      amountPaise: 200,
+    });
+    expect(uri).toBe('upi://pay?pa=9174991503-2@ibl&am=2.00&cu=INR');
+    expect(uri).not.toContain('pn=');
+    expect(uri).not.toContain('tr=');
+    expect(uri).not.toContain('mc=');
+  });
+
+  it('keeps real payee name on P2P when it differs from VPA local part', () => {
     const uri = buildUpiPayUri({
       payeeVpa: '9174991503-2@ibl',
       payeeName: 'Krishna Chand Patidar',
       amountPaise: 200,
     });
     expect(uri).toContain('pa=9174991503-2@ibl');
-    expect(uri).toContain('am=2.00');
-    expect(uri).toContain('cu=INR');
-    expect(uri).not.toContain('tr=');
+    expect(uri).toContain('pn=Krishna');
     expect(uri).not.toContain('mc=');
-    expect(uri).not.toContain('%40');
   });
 
   it('keeps merchant tr and mc only when supplied from the QR', () => {

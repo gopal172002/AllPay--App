@@ -372,13 +372,49 @@ function amountsEqual(a: string, b: string): boolean {
   return pa !== null && pb !== null && pa === pb;
 }
 
+/** True when paying a personal UPI ID (no merchant category from the scanned QR). */
+export function isPersonalP2pPayment(input: {
+  merchantCategoryCode?: string;
+  payeeVpa: string;
+  baseSanitizedUri?: string;
+}): boolean {
+  const mc =
+    input.merchantCategoryCode?.trim() ||
+    extractMcFromSanitizedUri(input.baseSanitizedUri);
+  if (mc && mc !== '0000') {
+    return false;
+  }
+  return true;
+}
+
+function extractMcFromSanitizedUri(baseSanitizedUri?: string): string | undefined {
+  if (!baseSanitizedUri?.toLowerCase().startsWith('upi://pay?')) {
+    return undefined;
+  }
+  const split = splitUpiUri(baseSanitizedUri);
+  if (!split) {
+    return undefined;
+  }
+  return parseQuery(split.query).mc;
+}
+
+function shouldIncludePayeeName(payeeVpa: string, payeeName: string | undefined): boolean {
+  const name = payeeName?.trim();
+  if (!name) {
+    return false;
+  }
+  const local = payeeVpa.split('@')[0]?.trim().toLowerCase();
+  if (local && name.toLowerCase() === local) {
+    return false;
+  }
+  return true;
+}
+
 /**
  * Build a launch URI that matches NPCI QR-relay rules:
  * - Signed QR (has `sign`): never alter params — signature covers the whole string.
- * - Unsigned QR: relay QR fields; set confirmed amount; never invent mode/orgid/sign.
- *
- * Shopping apps succeed because they are registered merchants with signed intents.
- * AllPay relays the scanned payee QR — same path banks accept for camera scan.
+ * - Merchant QR: relay QR fields; set confirmed amount; never invent mode/orgid/sign.
+ * - Personal P2P: ultra-minimal pa + am + cu (banks reject extra merchant-like fields).
  */
 export function buildUpiPayUri(input: {
   payeeVpa: string;
@@ -390,6 +426,7 @@ export function buildUpiPayUri(input: {
   baseSanitizedUri?: string;
 }): string {
   const am = formatAmountPaise(input.amountPaise);
+  const personalP2p = isPersonalP2pPayment(input);
 
   if (input.baseSanitizedUri?.toLowerCase().startsWith('upi://pay?')) {
     const split = splitUpiUri(input.baseSanitizedUri);
@@ -401,13 +438,14 @@ export function buildUpiPayUri(input: {
         if (fromQr.am && amountsEqual(fromQr.am, am)) {
           return input.baseSanitizedUri.trim();
         }
-        // Signed QR without usable amount — strip crypto fields, rebuild unsigned.
         const unsigned: Record<string, string> = {
           pa: fromQr.pa || input.payeeVpa.trim(),
-          pn: (fromQr.pn || input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
           am,
           cu: 'INR',
         };
+        if (shouldIncludePayeeName(unsigned.pa, fromQr.pn || input.payeeName)) {
+          unsigned.pn = (fromQr.pn || input.payeeName).slice(0, MAX_NAME);
+        }
         if (fromQr.tn) {
           unsigned.tn = fromQr.tn.slice(0, MAX_NOTE);
         }
@@ -426,7 +464,32 @@ export function buildUpiPayUri(input: {
         return buildSanitizedUri(unsigned);
       }
 
-      // Unsigned QR relay — keep merchant fields from QR, set confirmed amount.
+      // Static QR with no amount — only add am, keep everything else from scan.
+      if (!fromQr.am && personalP2p) {
+        const params: Record<string, string> = {
+          pa: fromQr.pa || input.payeeVpa.trim(),
+          am,
+          cu: 'INR',
+        };
+        if (shouldIncludePayeeName(params.pa, fromQr.pn)) {
+          params.pn = fromQr.pn.slice(0, MAX_NAME);
+        }
+        return buildSanitizedUri(params);
+      }
+
+      if (personalP2p) {
+        const params: Record<string, string> = {
+          pa: fromQr.pa || input.payeeVpa.trim(),
+          am,
+          cu: 'INR',
+        };
+        if (shouldIncludePayeeName(params.pa, fromQr.pn)) {
+          params.pn = fromQr.pn.slice(0, MAX_NAME);
+        }
+        return buildSanitizedUri(params);
+      }
+
+      // Merchant QR relay — keep merchant fields from QR, set confirmed amount.
       const params: Record<string, string> = {
         pa: fromQr.pa || input.payeeVpa.trim(),
         pn: (fromQr.pn || input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
@@ -453,10 +516,20 @@ export function buildUpiPayUri(input: {
       if (fromQr.mam) {
         params.mam = fromQr.mam;
       }
-      // Do NOT copy mode/orgid/sign from nowhere — inventing them without a valid
-      // NPCI signature causes PSP apps to reject with risk / tamper errors.
       return buildSanitizedUri(params);
     }
+  }
+
+  if (personalP2p) {
+    const params: Record<string, string> = {
+      pa: input.payeeVpa.trim(),
+      am,
+      cu: 'INR',
+    };
+    if (shouldIncludePayeeName(params.pa, input.payeeName)) {
+      params.pn = input.payeeName.trim().slice(0, MAX_NAME);
+    }
+    return buildSanitizedUri(params);
   }
 
   const params: Record<string, string> = {

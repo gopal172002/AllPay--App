@@ -1,7 +1,7 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
-import React, {useState} from 'react';
-import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
+import React, {useMemo, useState} from 'react';
+import {Alert, Image, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -16,12 +16,14 @@ import {getPolicyWarningFromPolicies} from '../utils/policies';
 import {toast} from '../utils/toast';
 import {trackUpiEvent} from '../upi/analytics';
 import {isSaneAmountPaise, paiseToRupeeLabel, parseRupeeInputToPaise} from '../upi/money';
-import {buildUpiPayUri} from '../upi/scanner/UpiQrParser';
+import {buildUpiPayUri, isPersonalP2pPayment} from '../upi/scanner/UpiQrParser';
 import {
   detectIosPaymentUpiApps,
   hasCompatibleUpiApp,
   launchUpiIntent,
+  upiQrImageUrl,
 } from '../upi/payment/UpiPaymentLauncher';
+import {detectInstalledUpiApps} from '../services/upiApps';
 import {
   mapUpiResultToStatus,
   parseUpiPaymentResult,
@@ -39,7 +41,7 @@ const DetailRow = ({label, value}: {label: string; value: string}) => (
   </View>
 );
 
-function pickIosUpiApp(
+function pickUpiApp(
   apps: Array<{id: string; name: string}>,
   preferredId: string | null,
 ): Promise<string | null> {
@@ -58,7 +60,7 @@ function pickIosUpiApp(
       : apps;
     Alert.alert(
       'Pay with',
-      'Choose a UPI app to complete payment.',
+      'Choose a UPI app. For personal UPI IDs, PhonePe or Google Pay often work when Paytm is blocked.',
       [
         ...ordered.map(app => ({
           text: app.name,
@@ -91,6 +93,29 @@ export const PaymentScreen = () => {
   );
   const [paying, setPaying] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+
+  const personalP2p = isPersonalP2pPayment({
+    payeeVpa: merchant.vpa,
+    merchantCategoryCode: merchant.merchantCategoryCode,
+    baseSanitizedUri: merchant.sanitizedUri,
+  });
+
+  const previewPaise =
+    qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
+  const previewUri = useMemo(() => {
+    if (!previewPaise || !isSaneAmountPaise(previewPaise)) {
+      return null;
+    }
+    return buildUpiPayUri({
+      payeeVpa: merchant.vpa,
+      payeeName: merchant.name,
+      amountPaise: previewPaise,
+      note: merchant.note,
+      merchantTransactionRef: merchant.qrTransactionRef,
+      merchantCategoryCode: merchant.merchantCategoryCode,
+      baseSanitizedUri: merchant.sanitizedUri,
+    });
+  }, [merchant, previewPaise]);
 
   const continuePayment = async (parsedPaise: number) => {
     if (paying || !profile) {
@@ -131,28 +156,44 @@ export const PaymentScreen = () => {
       }
 
       let preferredAppId = defaultUpiAppId;
-      if (Platform.OS === 'ios') {
-        const iosApps = await detectIosPaymentUpiApps();
-        const defaultAvailable =
-          defaultUpiAppId && iosApps.some(app => app.id === defaultUpiAppId);
-        if (defaultAvailable) {
-          preferredAppId = defaultUpiAppId;
-        } else {
-          const chosen = await pickIosUpiApp(iosApps, defaultUpiAppId);
-          if (!chosen) {
-            await applyUpiPaymentStatus(payment.id, 'CANCELLED');
-            trackUpiEvent('upi_result_cancelled');
-            navigation.replace('PaymentResult', {paymentId: payment.id});
-            return;
-          }
-          preferredAppId = chosen;
+      const installedApps =
+        Platform.OS === 'ios'
+          ? await detectIosPaymentUpiApps()
+          : (await detectInstalledUpiApps()).map(app => ({id: app.id, name: app.name}));
+
+      if (installedApps.length === 0) {
+        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+        toast.error(
+          'No UPI app',
+          'Install Google Pay, PhonePe, Paytm, or BHIM, then try again.',
+        );
+        navigation.replace('PaymentResult', {paymentId: payment.id});
+        return;
+      }
+
+      const defaultAvailable =
+        defaultUpiAppId && installedApps.some(app => app.id === defaultUpiAppId);
+      if (defaultAvailable) {
+        preferredAppId = defaultUpiAppId;
+      } else if (personalP2p && installedApps.some(app => app.id === 'phonepe')) {
+        preferredAppId = 'phonepe';
+      } else if (installedApps.length > 1) {
+        const chosen = await pickUpiApp(installedApps, defaultUpiAppId);
+        if (!chosen) {
+          await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+          trackUpiEvent('upi_result_cancelled');
+          navigation.replace('PaymentResult', {paymentId: payment.id});
+          return;
         }
+        preferredAppId = chosen;
+      } else {
+        preferredAppId = installedApps[0].id;
       }
 
       await markUpiAppOpened(payment.id);
       setStatusMessage('Opening UPI app...');
       trackUpiEvent('upi_app_launched');
-      const launch = await launchUpiIntent(uri, {preferredAppId});
+      const launch = await launchUpiIntent(uri, {preferredAppId, personalP2p});
 
       if (launch.kind === 'no_app') {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
@@ -169,7 +210,9 @@ export const PaymentScreen = () => {
         trackUpiEvent('upi_result_unknown');
         toast.info(
           'Complete payment in UPI app',
-          'After PIN, return here. If the bank blocks the link, tap I paid — record expense only after money is sent.',
+          personalP2p
+            ? 'If SBI/Paytm shows risk policy after PIN, scan the QR below in PhonePe or Google Pay instead.'
+            : 'After PIN, return here and confirm if status is unknown.',
         );
       } else {
         const parsed = parseUpiPaymentResult(launch.raw);
@@ -294,11 +337,24 @@ export const PaymentScreen = () => {
         </Section>
 
         <Text style={styles.disclaimer}>
-          Best success: scan a shop / merchant UPI QR (with merchant code). Personal
-          UPI IDs are often blocked by banks on auto-open links — that is NPCI risk
-          policy, not AllPay PIN handling. On iPhone after pay, confirm with “I paid”
-          if status is unknown.
+          {personalP2p
+            ? 'Personal UPI IDs: banks (especially SBI) often block auto-pay links from third-party apps after PIN. If that happens, scan the payment QR below inside PhonePe or Google Pay — same as scanning the original QR.'
+            : 'Shop / merchant QRs usually work with auto-pay. PIN is entered only inside your UPI app.'}
         </Text>
+
+        {personalP2p && previewUri ? (
+          <View style={styles.qrBox}>
+            <Text style={styles.qrTitle}>If auto-pay is blocked by bank</Text>
+            <Text style={styles.qrHelp}>
+              Open PhonePe or Google Pay → Scan & Pay → scan this code
+            </Text>
+            <Image
+              source={{uri: upiQrImageUrl(previewUri)}}
+              style={styles.qrImage}
+              accessibilityLabel="Payment QR code"
+            />
+          </View>
+        ) : null}
 
         <PrimaryButton
           label={paying ? 'Opening UPI…' : payLabel}
@@ -356,6 +412,33 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 13,
     lineHeight: 19,
+    marginTop: 4,
+  },
+  qrBox: {
+    marginTop: 16,
+    marginBottom: 8,
+    padding: 14,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    alignItems: 'center',
+    gap: 8,
+  },
+  qrTitle: {
+    color: '#0f172a',
+    fontWeight: '800',
+    fontSize: 14,
+  },
+  qrHelp: {
+    color: '#475569',
+    fontSize: 12,
+    lineHeight: 18,
+    textAlign: 'center',
+  },
+  qrImage: {
+    width: 220,
+    height: 220,
     marginTop: 4,
   },
 });

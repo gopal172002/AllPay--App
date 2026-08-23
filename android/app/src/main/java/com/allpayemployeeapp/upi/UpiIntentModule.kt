@@ -144,12 +144,17 @@ class UpiIntentModule(reactContext: ReactApplicationContext) :
     pendingPromise = promise
     UiThreadUtil.runOnUiThread {
       try {
-        // NPCI-compatible launch: generic upi:// ACTION_VIEW + system chooser.
-        // Package-specific deep links (paytmmp://) change initiation metadata and
-        // often trigger bank "UPI risk policy" for non-merchant VPAs.
         val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(upiUri))
         viewIntent.addCategory(Intent.CATEGORY_DEFAULT)
-        // Ignore packageName for pay — always use OS chooser like shopping SDKs' generic intent.
+        val targetPackage = packageName?.trim().orEmpty()
+        if (targetPackage.isNotEmpty()) {
+          viewIntent.setPackage(targetPackage)
+          if (viewIntent.resolveActivity(activity.packageManager) != null) {
+            activity.startActivityForResult(viewIntent, REQUEST_CODE)
+            return@runOnUiThread
+          }
+          viewIntent.setPackage(null)
+        }
         val chooser = Intent.createChooser(viewIntent, "Pay using")
         activity.startActivityForResult(chooser, REQUEST_CODE)
       } catch (error: Exception) {
