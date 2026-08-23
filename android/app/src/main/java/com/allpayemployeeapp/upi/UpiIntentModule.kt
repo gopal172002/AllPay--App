@@ -161,6 +161,18 @@ class UpiIntentModule(reactContext: ReactApplicationContext) :
 
   private fun launchUpiPayment(activity: Activity, upiUri: String, preferredPackage: String) {
     val pm = activity.packageManager
+    val query = upiUri.substringAfter("?", "")
+
+    if (preferredPackage == "net.one97.paytm" && query.isNotEmpty()) {
+      val paytmIntent = Intent(Intent.ACTION_VIEW, Uri.parse("paytmmp://pay?$query"))
+      paytmIntent.addCategory(Intent.CATEGORY_DEFAULT)
+      paytmIntent.setPackage("net.one97.paytm")
+      if (paytmIntent.resolveActivity(pm) != null) {
+        activity.startActivityForResult(paytmIntent, REQUEST_CODE)
+        return
+      }
+    }
+
     val uri = Uri.parse(upiUri)
 
     if (preferredPackage.isNotEmpty() && UPI_PAYMENT_PACKAGES.contains(preferredPackage)) {

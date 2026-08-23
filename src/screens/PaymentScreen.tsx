@@ -1,7 +1,7 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
-import React, {useMemo, useState} from 'react';
-import {Alert, Image, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
+import React, {useState} from 'react';
+import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -21,7 +21,6 @@ import {
   detectIosPaymentUpiApps,
   hasCompatibleUpiApp,
   launchUpiIntent,
-  upiQrImageUrl,
 } from '../upi/payment/UpiPaymentLauncher';
 import {detectInstalledUpiApps} from '../services/upiApps';
 import {
@@ -100,23 +99,6 @@ export const PaymentScreen = () => {
     baseSanitizedUri: merchant.sanitizedUri,
   });
 
-  const previewPaise =
-    qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
-  const previewUri = useMemo(() => {
-    if (!previewPaise || !isSaneAmountPaise(previewPaise)) {
-      return null;
-    }
-    return buildUpiPayUri({
-      payeeVpa: merchant.vpa,
-      payeeName: merchant.name,
-      amountPaise: previewPaise,
-      note: merchant.note,
-      merchantTransactionRef: merchant.qrTransactionRef,
-      merchantCategoryCode: merchant.merchantCategoryCode,
-      baseSanitizedUri: merchant.sanitizedUri,
-    });
-  }, [merchant, previewPaise]);
-
   const continuePayment = async (parsedPaise: number) => {
     if (paying || !profile) {
       return;
@@ -188,6 +170,17 @@ export const PaymentScreen = () => {
         preferredAppId = chosen;
       } else {
         preferredAppId = installedApps[0].id;
+      }
+
+      if (personalP2p) {
+        await markUpiAppOpened(payment.id);
+        trackUpiEvent('upi_app_launched');
+        navigation.replace('PaymentQrPay', {
+          paymentId: payment.id,
+          upiUri: uri,
+          preferredAppId: preferredAppId ?? 'paytm',
+        });
+        return;
       }
 
       await markUpiAppOpened(payment.id);
@@ -289,7 +282,9 @@ export const PaymentScreen = () => {
     qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
   const payLabel =
     displayPaise && isSaneAmountPaise(displayPaise)
-      ? `Pay ₹${paiseToRupeeLabel(displayPaise)}`
+      ? personalP2p
+        ? `Pay ₹${paiseToRupeeLabel(displayPaise)}`
+        : `Pay ₹${paiseToRupeeLabel(displayPaise)}`
       : 'Continue to UPI';
 
   return (
@@ -297,7 +292,11 @@ export const PaymentScreen = () => {
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader
           title="Confirm Payment"
-          subtitle="Opens your UPI app with the scanned payee. PIN is entered only in that app."
+          subtitle={
+            personalP2p
+              ? 'Personal UPI — opens scan-to-pay (works with SBI). Merchant QRs use auto-pay.'
+              : 'Opens your UPI app with payee filled. PIN is entered only in that app.'
+          }
         />
 
         {statusMessage ? (
@@ -338,23 +337,9 @@ export const PaymentScreen = () => {
 
         <Text style={styles.disclaimer}>
           {personalP2p
-            ? 'Personal UPI IDs: banks (especially SBI) often block auto-pay links from third-party apps after PIN. If that happens, scan the payment QR below inside PhonePe or Google Pay — same as scanning the original QR.'
-            : 'Shop / merchant QRs usually work with auto-pay. PIN is entered only inside your UPI app.'}
+            ? 'Personal UPI IDs: banks block auto-fill after PIN. AllPay opens a payment QR — scan it in Paytm like a normal shop QR.'
+            : 'Shop / merchant QRs open your UPI app directly with payee and amount filled.'}
         </Text>
-
-        {personalP2p && previewUri ? (
-          <View style={styles.qrBox}>
-            <Text style={styles.qrTitle}>If auto-pay is blocked by bank</Text>
-            <Text style={styles.qrHelp}>
-              Open PhonePe or Google Pay → Scan & Pay → scan this code
-            </Text>
-            <Image
-              source={{uri: upiQrImageUrl(previewUri)}}
-              style={styles.qrImage}
-              accessibilityLabel="Payment QR code"
-            />
-          </View>
-        ) : null}
 
         <PrimaryButton
           label={paying ? 'Opening UPI…' : payLabel}
@@ -412,33 +397,6 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 13,
     lineHeight: 19,
-    marginTop: 4,
-  },
-  qrBox: {
-    marginTop: 16,
-    marginBottom: 8,
-    padding: 14,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#f8fbff',
-    alignItems: 'center',
-    gap: 8,
-  },
-  qrTitle: {
-    color: '#0f172a',
-    fontWeight: '800',
-    fontSize: 14,
-  },
-  qrHelp: {
-    color: '#475569',
-    fontSize: 12,
-    lineHeight: 18,
-    textAlign: 'center',
-  },
-  qrImage: {
-    width: 220,
-    height: 220,
     marginTop: 4,
   },
 });
