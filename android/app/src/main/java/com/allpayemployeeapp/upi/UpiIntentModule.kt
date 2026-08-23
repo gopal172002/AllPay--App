@@ -89,7 +89,7 @@ class UpiIntentModule(reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
-  fun pay(upiUri: String, promise: Promise) {
+  fun pay(upiUri: String, packageName: String?, promise: Promise) {
     if (!isSafeUpiUri(upiUri)) {
       promise.reject("INVALID_URI", "Only upi://pay URIs can be launched")
       return
@@ -113,8 +113,22 @@ class UpiIntentModule(reactContext: ReactApplicationContext) :
     UiThreadUtil.runOnUiThread {
       try {
         val viewIntent = Intent(Intent.ACTION_VIEW, Uri.parse(upiUri))
-        val chooser = Intent.createChooser(viewIntent, "Pay using")
-        activity.startActivityForResult(chooser, REQUEST_CODE)
+        viewIntent.addCategory(Intent.CATEGORY_DEFAULT)
+        val targetPackage = packageName?.trim().orEmpty()
+        if (targetPackage.isNotEmpty()) {
+          viewIntent.setPackage(targetPackage)
+          if (viewIntent.resolveActivity(activity.packageManager) == null) {
+            // Preferred app missing / cannot handle — fall back to chooser.
+            viewIntent.setPackage(null)
+            val chooser = Intent.createChooser(viewIntent, "Pay using")
+            activity.startActivityForResult(chooser, REQUEST_CODE)
+          } else {
+            activity.startActivityForResult(viewIntent, REQUEST_CODE)
+          }
+        } else {
+          val chooser = Intent.createChooser(viewIntent, "Pay using")
+          activity.startActivityForResult(chooser, REQUEST_CODE)
+        }
       } catch (error: Exception) {
         pendingPromise = null
         promise.reject("LAUNCH_FAILED", error.message)

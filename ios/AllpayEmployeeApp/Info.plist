@@ -42,11 +42,11 @@
 	<string>Photo library access is used to attach receipt images.</string>
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
-		<string>gpay</string>
-		<string>tez</string>
-		<string>phonepe</string>
 		<string>paytmmp</string>
 		<string>paytm</string>
+		<string>phonepe</string>
+		<string>gpay</string>
+		<string>tez</string>
 		<string>bhim</string>
 		<string>upi</string>
 		<string>amazonpay</string>

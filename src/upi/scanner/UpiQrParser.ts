@@ -349,36 +349,52 @@ export function buildUpiPayUri(input: {
   const paise = input.amountPaise % 100;
   const am = `${rupees}.${String(paise).padStart(2, '0')}`;
 
-  if (input.baseSanitizedUri?.toLowerCase().startsWith('upi://pay?')) {
-    const split = splitUpiUri(input.baseSanitizedUri);
-    if (split?.action === 'pay') {
-      const params = parseQuery(split.query);
-      params.am = am;
-      params.cu = 'INR';
-      if (input.note?.trim()) {
-        params.tn = input.note.trim().slice(0, MAX_NOTE);
-      }
-      // Never inject app-generated merchant refs.
-      return buildSanitizedUri(params);
-    }
-  }
-
+  // Intent payments must look like a normal P2P UPI request.
+  // Extra mc/tr/tn from rebuilds can make banks treat the txn as risky merchant collect.
+  // Only keep QR merchant fields when the original QR already had them.
   const params: Record<string, string> = {
     pa: input.payeeVpa.trim(),
-    pn: input.payeeName.trim().slice(0, MAX_NAME),
+    pn: (input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
     am,
     cu: 'INR',
   };
-  if (input.note?.trim()) {
-    params.tn = input.note.trim().slice(0, MAX_NOTE);
+
+  if (input.baseSanitizedUri?.toLowerCase().startsWith('upi://pay?')) {
+    const split = splitUpiUri(input.baseSanitizedUri);
+    if (split?.action === 'pay') {
+      const fromQr = parseQuery(split.query);
+      // Keep only safe QR-origin fields; always set amount from confirmed input.
+      if (fromQr.pa) {
+        params.pa = fromQr.pa;
+      }
+      if (fromQr.pn) {
+        params.pn = fromQr.pn.slice(0, MAX_NAME);
+      }
+      if (fromQr.tn) {
+        params.tn = fromQr.tn.slice(0, MAX_NOTE);
+      }
+      if (fromQr.tr) {
+        params.tr = fromQr.tr.slice(0, MAX_TR);
+      }
+      if (fromQr.mc && fromQr.mc !== '0000') {
+        params.mc = fromQr.mc.slice(0, 4);
+      }
+    }
+  } else {
+    if (input.note?.trim()) {
+      params.tn = input.note.trim().slice(0, MAX_NOTE);
+    }
+    const qrTr = input.merchantTransactionRef?.trim();
+    if (qrTr) {
+      params.tr = qrTr.slice(0, MAX_TR);
+    }
+    const qrMc = input.merchantCategoryCode?.trim();
+    if (qrMc && qrMc !== '0000') {
+      params.mc = qrMc.slice(0, 4);
+    }
   }
-  const qrTr = input.merchantTransactionRef?.trim();
-  if (qrTr) {
-    params.tr = qrTr.slice(0, MAX_TR);
-  }
-  const qrMc = input.merchantCategoryCode?.trim();
-  if (qrMc && qrMc !== '0000') {
-    params.mc = qrMc.slice(0, 4);
-  }
+
+  params.am = am;
+  params.cu = 'INR';
   return buildSanitizedUri(params);
 }

@@ -16,7 +16,8 @@ describe('UpiPaymentLauncher iOS', () => {
     Platform.OS = 'ios';
     jest.spyOn(Linking, 'canOpenURL').mockImplementation(async (url: string) => {
       return (
-        url.startsWith('paytmmp://') ||
+        url.startsWith('paytmmp://upi/pay') ||
+        url.startsWith('paytm://upi/pay') ||
         url.startsWith('phonepe://') ||
         url.startsWith('gpay://') ||
         url.startsWith('tez://') ||
@@ -38,16 +39,19 @@ describe('UpiPaymentLauncher iOS', () => {
     ).resolves.toBe(true);
   });
 
-  it('opens Paytm deep link instead of bare upi://', async () => {
+  it('opens Paytm UPI deep link (upi/pay) instead of bare upi:// or wallet pay', async () => {
     const result = await launchUpiIntent('upi://pay?pa=shop@upi&am=1.00', {
       preferredAppId: 'paytm',
     });
     expect(result).toEqual({kind: 'opened'});
     expect(Linking.openURL).toHaveBeenCalledWith(
-      expect.stringMatching(/^paytmmp:\/\/pay\?pa=shop%40upi&am=1\.00|paytmmp:\/\/pay\?pa=shop@upi&am=1\.00/),
+      expect.stringMatching(/^paytmmp:\/\/upi\/pay\?/),
     );
     expect(Linking.openURL).not.toHaveBeenCalledWith(
       expect.stringMatching(/^upi:\/\//),
+    );
+    expect(Linking.openURL).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^paytmmp:\/\/pay\?/),
     );
   });
 

@@ -11,20 +11,32 @@ type NativePayResult = {
 };
 
 type UpiIntentNative = {
-  pay: (upiUri: string) => Promise<NativePayResult>;
+  pay: (upiUri: string, packageName?: string | null) => Promise<NativePayResult>;
   hasCompatibleApp: (upiUri: string) => Promise<boolean>;
 };
 
 const native = NativeModules.UpiIntentModule as UpiIntentNative | undefined;
 
-/** Preferred payment apps on iOS — never open generic upi:// first (WhatsApp steals it). */
+/** Preferred payment apps — never open bare upi:// first (WhatsApp steals it on iOS). */
 const IOS_UPI_APP_ORDER = ['paytm', 'phonepe', 'gpay', 'bhim'] as const;
 
+/**
+ * Official PSP deep-link prefixes (Juspay / NPCI iOS package list).
+ * Paytm MUST be paytmmp://upi/pay — paytmmp://pay is a different (non-UPI) path
+ * that often fails after PIN with "UPI risk policy".
+ */
 const IOS_SCHEME_PREFIX: Record<(typeof IOS_UPI_APP_ORDER)[number], string[]> = {
-  paytm: ['paytmmp://pay', 'paytm://upi/pay'],
+  paytm: ['paytmmp://upi/pay', 'paytm://upi/pay'],
   phonepe: ['phonepe://pay', 'phonepe://upi/pay'],
   gpay: ['gpay://upi/pay', 'tez://upi/pay'],
-  bhim: ['bhim://upi/pay'],
+  bhim: ['bhim://upi/pay', 'bhim://upi://pay'],
+};
+
+const ANDROID_PACKAGE: Record<string, string> = {
+  paytm: 'net.one97.paytm',
+  phonepe: 'com.phonepe.app',
+  gpay: 'com.google.android.apps.nbu.paisa.user',
+  bhim: 'in.org.npci.upiapp',
 };
 
 export type UpiLaunchResult =
@@ -34,7 +46,7 @@ export type UpiLaunchResult =
   | {kind: 'no_app'}
   | {kind: 'unsupported'};
 
-export type IosUpiLaunchOptions = {
+export type UpiLaunchOptions = {
   /** Preferred app id: paytm | phonepe | gpay | bhim */
   preferredAppId?: string | null;
 };
@@ -51,11 +63,8 @@ function queryFromUpiUri(upiUri: string): string {
 }
 
 function buildAppPayUri(schemePrefix: string, query: string): string {
-  const base = schemePrefix.includes('?')
-    ? schemePrefix
-    : `${schemePrefix}${schemePrefix.endsWith('/') ? '' : ''}`;
-  const joiner = base.includes('?') ? '&' : '?';
-  return `${base}${joiner}${query}`;
+  const joiner = schemePrefix.includes('?') ? '&' : '?';
+  return `${schemePrefix}${joiner}${query}`;
 }
 
 async function canOpenScheme(url: string): Promise<boolean> {
@@ -95,22 +104,19 @@ async function hasCompatibleUpiAppIos(): Promise<boolean> {
   if (apps.length > 0) {
     return true;
   }
-  // Fallback: Android-style list used for settings display
   try {
     const apps = await detectInstalledUpiApps();
-    return apps.some(app => IOS_UPI_APP_ORDER.includes(app.id as (typeof IOS_UPI_APP_ORDER)[number]));
+    return apps.some(app =>
+      IOS_UPI_APP_ORDER.includes(app.id as (typeof IOS_UPI_APP_ORDER)[number]),
+    );
   } catch {
     return false;
   }
 }
 
-/**
- * Opens a specific UPI payment app on iOS with the same query as upi://pay?...
- * Avoids bare upi:// which often opens WhatsApp.
- */
 async function launchUpiIntentIos(
   upiUri: string,
-  options?: IosUpiLaunchOptions,
+  options?: UpiLaunchOptions,
 ): Promise<UpiLaunchResult> {
   const query = queryFromUpiUri(upiUri);
   if (!query) {
@@ -124,7 +130,8 @@ async function launchUpiIntentIos(
 
   const preferred = options?.preferredAppId?.toLowerCase() ?? null;
   const orderedIds = [
-    ...(preferred && IOS_UPI_APP_ORDER.includes(preferred as (typeof IOS_UPI_APP_ORDER)[number])
+    ...(preferred &&
+    IOS_UPI_APP_ORDER.includes(preferred as (typeof IOS_UPI_APP_ORDER)[number])
       ? [preferred]
       : []),
     ...IOS_UPI_APP_ORDER.filter(id => id !== preferred),
@@ -133,10 +140,10 @@ async function launchUpiIntentIos(
   for (const id of orderedIds) {
     const prefixes = IOS_SCHEME_PREFIX[id as (typeof IOS_UPI_APP_ORDER)[number]];
     for (const prefix of prefixes) {
-      const target = buildAppPayUri(prefix, query);
       if (!(await canOpenScheme(prefix))) {
         continue;
       }
+      const target = buildAppPayUri(prefix, query);
       try {
         await Linking.openURL(target);
         return {kind: 'opened'};
@@ -165,14 +172,13 @@ export async function hasCompatibleUpiApp(upiUri: string): Promise<boolean> {
 }
 
 /**
- * Opens a UPI payment app.
- * - Android: ACTION_VIEW chooser + Activity Result extras when available
- * - iOS: app-specific deep links (Paytm / PhonePe / GPay / BHIM) — never WhatsApp via upi://
- * PIN entry happens only inside the external UPI app.
+ * Opens a UPI payment app with a standard upi://pay?... request.
+ * - Android: ACTION_VIEW (optionally package-targeted) + Activity Result
+ * - iOS: PSP deep links (Paytm = paytmmp://upi/pay) — never WhatsApp
  */
 export async function launchUpiIntent(
   upiUri: string,
-  options?: IosUpiLaunchOptions,
+  options?: UpiLaunchOptions,
 ): Promise<UpiLaunchResult> {
   assertSafeUpiUri(upiUri);
   if (Platform.OS === 'ios') {
@@ -181,8 +187,10 @@ export async function launchUpiIntent(
   if (Platform.OS !== 'android' || !native?.pay) {
     return {kind: 'unsupported'};
   }
+  const preferred = options?.preferredAppId?.toLowerCase() ?? null;
+  const packageName = preferred ? ANDROID_PACKAGE[preferred] ?? null : null;
   try {
-    const result = await native.pay(upiUri);
+    const result = await native.pay(upiUri, packageName);
     if (result.unsupported) {
       return {kind: 'unsupported'};
     }

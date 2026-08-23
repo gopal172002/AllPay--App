@@ -32,7 +32,7 @@ export const KNOWN_UPI_APPS: UpiApp[] = [
     id: 'paytm',
     name: 'Paytm',
     logo: 'PT',
-    scheme: 'paytmmp://pay',
+    scheme: 'paytmmp://upi/pay',
     storeUrl:
       'https://play.google.com/store/apps/details?id=net.one97.paytm',
   },
