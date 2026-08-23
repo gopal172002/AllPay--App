@@ -3,13 +3,13 @@ import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import React, {useState} from 'react';
 import {
   Alert,
+  Clipboard,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import Clipboard from '@react-native-clipboard/clipboard';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
