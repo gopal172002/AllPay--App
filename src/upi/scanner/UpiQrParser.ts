@@ -95,14 +95,29 @@ function parseQuery(query: string): Record<string, string> {
   return out;
 }
 
+function encodeUpiParam(value: string): string {
+  return encodeURIComponent(value).replace(/%20/g, '+');
+}
+
+/**
+ * Build a UPI pay URI like bank QRs do: keep `@` in `pa` literal.
+ * Avoid URLSearchParams — some banks/UPI apps treat over-encoded params as risky.
+ */
 function buildSanitizedUri(params: Record<string, string>): string {
-  const search = new URLSearchParams();
+  const parts: string[] = [];
   for (const key of ['pa', 'pn', 'am', 'cu', 'tn', 'tr', 'mc']) {
-    if (params[key]) {
-      search.set(key, params[key]);
+    const value = params[key];
+    if (!value) {
+      continue;
     }
+    // Keep VPA `@` unescaped (standard in Indian UPI QRs).
+    if (key === 'pa') {
+      parts.push(`pa=${value}`);
+      continue;
+    }
+    parts.push(`${key}=${encodeUpiParam(value)}`);
   }
-  return `upi://pay?${search.toString()}`;
+  return `upi://pay?${parts.join('&')}`;
 }
 
 function resultFromParams(params: Record<string, string>): UpiQrParseResult {
@@ -327,26 +342,43 @@ export function buildUpiPayUri(input: {
   merchantTransactionRef?: string;
   /** Only when the scanned QR included `mc`. */
   merchantCategoryCode?: string;
+  /** Prefer the QR's own sanitized URI and only override amount. */
+  baseSanitizedUri?: string;
 }): string {
   const rupees = Math.floor(input.amountPaise / 100);
   const paise = input.amountPaise % 100;
   const am = `${rupees}.${String(paise).padStart(2, '0')}`;
-  const search = new URLSearchParams({
+
+  if (input.baseSanitizedUri?.toLowerCase().startsWith('upi://pay?')) {
+    const split = splitUpiUri(input.baseSanitizedUri);
+    if (split?.action === 'pay') {
+      const params = parseQuery(split.query);
+      params.am = am;
+      params.cu = 'INR';
+      if (input.note?.trim()) {
+        params.tn = input.note.trim().slice(0, MAX_NOTE);
+      }
+      // Never inject app-generated merchant refs.
+      return buildSanitizedUri(params);
+    }
+  }
+
+  const params: Record<string, string> = {
     pa: input.payeeVpa.trim(),
     pn: input.payeeName.trim().slice(0, MAX_NAME),
     am,
     cu: 'INR',
-  });
+  };
   if (input.note?.trim()) {
-    search.set('tn', input.note.trim().slice(0, MAX_NOTE));
+    params.tn = input.note.trim().slice(0, MAX_NOTE);
   }
   const qrTr = input.merchantTransactionRef?.trim();
   if (qrTr) {
-    search.set('tr', qrTr.slice(0, MAX_TR));
+    params.tr = qrTr.slice(0, MAX_TR);
   }
   const qrMc = input.merchantCategoryCode?.trim();
   if (qrMc && qrMc !== '0000') {
-    search.set('mc', qrMc.slice(0, 4));
+    params.mc = qrMc.slice(0, 4);
   }
-  return `upi://pay?${search.toString()}`;
+  return buildSanitizedUri(params);
 }

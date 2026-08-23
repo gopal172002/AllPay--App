@@ -155,7 +155,7 @@ describe('UpiQrParser', () => {
     );
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.sanitizedUri).toContain('pa=shop%40upi');
+      expect(result.sanitizedUri).toContain('pa=shop@upi');
       expect(result.sanitizedUri).not.toContain('foo=');
       expect(result.category).toBe('food');
     }
@@ -169,11 +169,12 @@ describe('buildUpiPayUri', () => {
       payeeName: 'Krishna Chand Patidar',
       amountPaise: 200,
     });
-    expect(uri).toContain('pa=9174991503-2%40ibl');
+    expect(uri).toContain('pa=9174991503-2@ibl');
     expect(uri).toContain('am=2.00');
     expect(uri).toContain('cu=INR');
     expect(uri).not.toContain('tr=');
     expect(uri).not.toContain('mc=');
+    expect(uri).not.toContain('%40');
   });
 
   it('keeps merchant tr and mc only when supplied from the QR', () => {
@@ -185,6 +186,18 @@ describe('buildUpiPayUri', () => {
       merchantCategoryCode: '5812',
     });
     expect(uri).toContain('tr=ORD12345');
+    expect(uri).toContain('mc=5812');
+  });
+
+  it('reuses base sanitized QR and only overrides amount', () => {
+    const uri = buildUpiPayUri({
+      payeeVpa: 'shop@upi',
+      payeeName: 'Shop',
+      amountPaise: 250,
+      baseSanitizedUri: 'upi://pay?pa=shop@upi&pn=Shop&am=10.00&cu=INR&mc=5812',
+    });
+    expect(uri).toContain('am=2.50');
+    expect(uri).toContain('pa=shop@upi');
     expect(uri).toContain('mc=5812');
   });
 });

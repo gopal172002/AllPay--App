@@ -26,6 +26,7 @@ export function merchantFromUpiQr(parsed: UpiQrParseOk): MerchantData {
     ...(parsed.note ? {note: parsed.note} : {}),
     ...(parsed.transactionReference ? {qrTransactionRef: parsed.transactionReference} : {}),
     ...(parsed.merchantCategoryCode ? {merchantCategoryCode: parsed.merchantCategoryCode} : {}),
+    sanitizedUri: parsed.sanitizedUri,
   };
 }
 

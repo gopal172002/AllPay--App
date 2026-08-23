@@ -116,6 +116,7 @@ export const PaymentScreen = () => {
         note: merchant.note,
         merchantTransactionRef: merchant.qrTransactionRef,
         merchantCategoryCode: merchant.merchantCategoryCode,
+        baseSanitizedUri: merchant.sanitizedUri,
       });
 
       const hasApp = await hasCompatibleUpiApp(uri);
@@ -240,14 +241,25 @@ export const PaymentScreen = () => {
       );
     }
 
-    if (warning) {
-      Alert.alert('Policy warning', warning, [
+    const startPay = () => {
+      if (warning) {
+        Alert.alert('Policy warning', warning, [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Proceed anyway', onPress: () => continuePayment(parsedPaise)},
+        ]);
+        return;
+      }
+      continuePayment(parsedPaise);
+    };
+
+    Alert.alert(
+      'Before you pay',
+      'End any phone or WhatsApp call first. Banks block UPI with “risk policy” while a call is active — money is not deducted.',
+      [
         {text: 'Cancel', style: 'cancel'},
-        {text: 'Proceed anyway', onPress: () => continuePayment(parsedPaise)},
-      ]);
-      return;
-    }
-    await continuePayment(parsedPaise);
+        {text: 'I ended calls — Pay', onPress: startPay},
+      ],
+    );
   };
 
   const displayPaise =
@@ -302,9 +314,9 @@ export const PaymentScreen = () => {
         </Section>
 
         <Text style={styles.disclaimer}>
-          On iPhone, choose Paytm, PhonePe, Google Pay, or BHIM — WhatsApp is not
-          used. Enter your UPI PIN only inside that app. After you return, tap
-          “I paid — record expense”.
+          End WhatsApp/phone calls before paying. Then choose Paytm, PhonePe, Google
+          Pay, or BHIM. Enter UPI PIN only inside that app. On iPhone, after you
+          return, tap “I paid — record expense”.
         </Text>
 
         <PrimaryButton

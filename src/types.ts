@@ -41,6 +41,8 @@ export type MerchantData = {
   qrTransactionRef?: string;
   /** Original `mc` from QR — omit on P2P intents unless the QR had it. */
   merchantCategoryCode?: string;
+  /** Original sanitized upi://pay?... from the scan. */
+  sanitizedUri?: string;
 };
 
 export type Receipt = {
