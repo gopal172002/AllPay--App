@@ -56,7 +56,9 @@ If Expenzo is killed while the UPI app is open, in-flight payments become `UNKNO
 - Some apps return empty extras → `UNKNOWN`
 - Android may kill Expenzo while the user is in the UPI app
 - There is no official public NPCI inquiry API for arbitrary third-party apps
-- iOS does not support this Activity Result flow
+- **iOS** opens `upi://pay` via `Linking.openURL` (no Activity Result). After the UPI app
+  opens, status stays `UPI_APP_OPENED` until the user taps **I paid — record expense**
+  (`USER_CONFIRMED`). Auto `SUCCESS_REPORTED` is Android-only.
 
 ## Real-device tests before production
 
@@ -69,3 +71,11 @@ Install and complete a live payment (small amount) with:
 - At least one bank UPI app (SBI / HDFC / iMobile etc.)
 
 For each: success, user-cancel, pending, kill-Expenzo-during-pay, and duplicate-return (do not create two expenses).
+
+### iPhone
+
+1. Install a UPI app (Google Pay / PhonePe / Paytm / BHIM)
+2. Scan QR → Confirm → Pay (opens UPI app)
+3. Complete PIN in the UPI app
+4. Return to AllPay → tap **I paid — record expense**
+5. Confirm expense appears in History

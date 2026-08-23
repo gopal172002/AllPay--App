@@ -1,7 +1,7 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import React, {useState} from 'react';
-import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {Alert, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -80,22 +80,12 @@ export const PaymentScreen = () => {
         transactionReference: payment.launchTxnRef,
       });
 
-      if (Platform.OS !== 'android') {
-        await applyUpiPaymentStatus(payment.id, 'UNKNOWN');
-        toast.error(
-          'Android required',
-          'UPI Intent payments are supported on Android devices with a UPI app.',
-        );
-        navigation.replace('PaymentResult', {paymentId: payment.id});
-        return;
-      }
-
       const hasApp = await hasCompatibleUpiApp(uri);
       if (!hasApp) {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
         toast.error(
           'No UPI app',
-          'No compatible UPI payment app was found on this device.',
+          'Install Google Pay, PhonePe, Paytm, or BHIM, then try again.',
         );
         navigation.replace('PaymentResult', {paymentId: payment.id});
         return;
@@ -110,13 +100,21 @@ export const PaymentScreen = () => {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
         toast.error(
           'No UPI app',
-          'No compatible UPI payment app was found on this device.',
+          'Install Google Pay, PhonePe, Paytm, or BHIM, then try again.',
         );
       } else if (launch.kind === 'cancelled') {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
         trackUpiEvent('upi_result_cancelled');
       } else if (launch.kind === 'unsupported') {
         await applyUpiPaymentStatus(payment.id, 'UNKNOWN');
+      } else if (launch.kind === 'opened') {
+        // iOS: UPI apps do not return Activity Result. Keep UPI_APP_OPENED
+        // so the user can confirm with "Record manually" after paying.
+        trackUpiEvent('upi_result_unknown');
+        toast.info(
+          'Complete payment in UPI app',
+          'After you pay, return here and tap Record manually if it succeeded.',
+        );
       } else {
         const parsed = parseUpiPaymentResult(launch.raw);
         const mapped = mapUpiResultToStatus(parsed, payment.launchTxnRef);
@@ -237,7 +235,8 @@ export const PaymentScreen = () => {
 
         <Text style={styles.disclaimer}>
           You will choose PhonePe, Google Pay, Paytm, BHIM, or a bank UPI app next.
-          Enter your UPI PIN only inside that app.
+          Enter your UPI PIN only inside that app. On iPhone, confirm the expense
+          with “I paid — record expense” after you return.
         </Text>
 
         <PrimaryButton

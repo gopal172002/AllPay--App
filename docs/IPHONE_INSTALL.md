@@ -6,7 +6,7 @@ You are on **Windows**. Apple does not let you build iPhone apps locally on Wind
 
 Then you install that file on your iPhone using **Sideloadly** (free, works on Windows with a USB cable).
 
-> **Note:** UPI Scan & Pay still does **not** work on iPhone (Android only). You can use login, history, settings, and manual expense recording.
+> **Note:** UPI Scan & Pay works on iPhone by opening your UPI app. After you pay, return to AllPay and tap **I paid — record expense** (iPhone cannot auto-detect UPI success like Android).
 
 ---
 

@@ -43,10 +43,13 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>gpay</string>
+		<string>tez</string>
 		<string>phonepe</string>
 		<string>paytmmp</string>
 		<string>bhim</string>
 		<string>upi</string>
+		<string>amazonpay</string>
+		<string>credpay</string>
 	</array>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>

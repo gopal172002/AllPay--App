@@ -71,7 +71,9 @@ export const PaymentResultScreen = () => {
             ? 'The UPI app was closed before a result was returned.'
             : status === 'USER_CONFIRMED'
               ? 'You confirmed this payment. This is not a UPI app success callback.'
-              : "We couldn't determine the result of this payment.";
+              : status === 'UPI_APP_OPENED'
+                ? 'A UPI app was opened. Finish the payment there, then tap Record manually if it succeeded. iPhone cannot auto-read UPI success like Android.'
+                : "We couldn't determine the result of this payment. If you already paid, tap Record manually.";
 
   const toneStyle =
     status === 'SUCCESS_REPORTED'
@@ -84,6 +86,11 @@ export const PaymentResultScreen = () => {
     const id = expense?.id ?? expenseIdForPayment(payment.id);
     navigation.replace('TransactionDetail', {transactionId: id});
   };
+
+  const recordManuallyLabel =
+    status === 'UPI_APP_OPENED' || status === 'UNKNOWN'
+      ? 'I paid — record expense'
+      : 'Record manually';
 
   return (
     <Screen safeTop={false}>
@@ -127,7 +134,7 @@ export const PaymentResultScreen = () => {
         {status === 'UNKNOWN' || status === 'PENDING' || status === 'UPI_APP_OPENED' || status === 'INITIATED' ? (
           <>
             <PrimaryButton
-              label="Record manually"
+              label={recordManuallyLabel}
               onPress={async () => {
                 await applyUpiPaymentStatus(payment.id, 'USER_CONFIRMED');
               }}
