@@ -57,7 +57,19 @@ If Expenzo is killed while the UPI app is open, in-flight payments become `UNKNO
 - Android may kill Expenzo while the user is in the UPI app
 - There is no official public NPCI inquiry API for arbitrary third-party apps
 - **iOS** opens `upi://pay` via app-specific deep links (Paytm / PhonePe / GPay / BHIM) — never WhatsApp via bare `upi://`
-- **Do not inject app-generated `tr`** into P2P UPI intents; NPCI risk policy rejects unknown merchant refs. Internal tracking uses `launchTxnRef` in Expenzo only.
+## Why “UPI risk policy” happens with auto-open links
+
+NPCI / banks often **reject third-party `upi://pay` intents** to personal VPAs
+(even after PIN), while the **same payment typed inside Paytm/PhonePe succeeds**.
+
+AllPay therefore:
+
+1. Copies the payee UPI ID
+2. Opens your UPI app (home — not a payment deep link)
+3. You pay normally inside that app
+4. Return and tap **I paid — record expense**
+
+Auto deep-link fill is no longer the primary path for P2P expense payments.
 
 ## Real-device tests before production
 

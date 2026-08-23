@@ -89,6 +89,38 @@ class UpiIntentModule(reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun openApp(packageName: String, promise: Promise) {
+    val activity = hostActivity()
+    if (activity == null) {
+      promise.reject("NO_ACTIVITY", "No Android activity is available")
+      return
+    }
+    val pkg = packageName.trim()
+    if (pkg.isEmpty()) {
+      promise.reject("INVALID_PACKAGE", "Package name is required")
+      return
+    }
+    UiThreadUtil.runOnUiThread {
+      try {
+        val launch = activity.packageManager.getLaunchIntentForPackage(pkg)
+        if (launch == null) {
+          val map = Arguments.createMap()
+          map.putBoolean("noApp", true)
+          promise.resolve(map)
+          return@runOnUiThread
+        }
+        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        activity.startActivity(launch)
+        val map = Arguments.createMap()
+        map.putBoolean("opened", true)
+        promise.resolve(map)
+      } catch (error: Exception) {
+        promise.reject("LAUNCH_FAILED", error.message)
+      }
+    }
+  }
+
+  @ReactMethod
   fun pay(upiUri: String, packageName: String?, promise: Promise) {
     if (!isSafeUpiUri(upiUri)) {
       promise.reject("INVALID_URI", "Only upi://pay URIs can be launched")

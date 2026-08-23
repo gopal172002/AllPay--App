@@ -13,6 +13,7 @@ type NativePayResult = {
 type UpiIntentNative = {
   pay: (upiUri: string, packageName?: string | null) => Promise<NativePayResult>;
   hasCompatibleApp: (upiUri: string) => Promise<boolean>;
+  openApp?: (packageName: string) => Promise<{opened?: boolean; noApp?: boolean}>;
 };
 
 const native = NativeModules.UpiIntentModule as UpiIntentNative | undefined;
@@ -32,11 +33,11 @@ const IOS_SCHEME_PREFIX: Record<(typeof IOS_UPI_APP_ORDER)[number], string[]> = 
   bhim: ['bhim://upi/pay', 'bhim://upi://pay'],
 };
 
-const ANDROID_PACKAGE: Record<string, string> = {
-  paytm: 'net.one97.paytm',
-  phonepe: 'com.phonepe.app',
-  gpay: 'com.google.android.apps.nbu.paisa.user',
-  bhim: 'in.org.npci.upiapp',
+const IOS_APP_HOME: Record<(typeof IOS_UPI_APP_ORDER)[number], string[]> = {
+  paytm: ['paytmmp://', 'paytm://'],
+  phonepe: ['phonepe://', 'phonepe://home'],
+  gpay: ['gpay://', 'tez://'],
+  bhim: ['bhim://'],
 };
 
 export type UpiLaunchResult =
@@ -171,10 +172,68 @@ export async function hasCompatibleUpiApp(upiUri: string): Promise<boolean> {
   }
 }
 
+const ANDROID_PACKAGE: Record<string, string> = {
+  paytm: 'net.one97.paytm',
+  phonepe: 'com.phonepe.app',
+  gpay: 'com.google.android.apps.nbu.paisa.user',
+  bhim: 'in.org.npci.upiapp',
+};
+
 /**
- * Opens a UPI payment app with a standard upi://pay?... request.
- * - Android: ACTION_VIEW (optionally package-targeted) + Activity Result
- * - iOS: PSP deep links (Paytm = paytmmp://upi/pay) — never WhatsApp
+ * Open a UPI app home screen WITHOUT a payment intent URI.
+ *
+ * NPCI / banks often reject third-party `upi://pay` intents to personal VPAs
+ * with "UPI risk policy", while the same payment typed inside Paytm succeeds.
+ * Opening the app + letting the user pay normally matches that working path.
+ */
+export async function openUpiAppHome(
+  appId: string | null | undefined,
+): Promise<UpiLaunchResult> {
+  const id = (appId ?? 'paytm').toLowerCase();
+  if (Platform.OS === 'android') {
+    const packageName = ANDROID_PACKAGE[id];
+    if (!packageName || !native?.openApp) {
+      return {kind: 'unsupported'};
+    }
+    try {
+      const result = await native.openApp(packageName);
+      if (result.noApp) {
+        return {kind: 'no_app'};
+      }
+      return {kind: 'opened'};
+    } catch {
+      return {kind: 'no_app'};
+    }
+  }
+
+  if (Platform.OS === 'ios') {
+    const homes =
+      IOS_APP_HOME[id as (typeof IOS_UPI_APP_ORDER)[number]] ?? IOS_APP_HOME.paytm;
+    for (const home of homes) {
+      try {
+        if (await canOpenScheme(home)) {
+          await Linking.openURL(home);
+          return {kind: 'opened'};
+        }
+      } catch {
+        // try next
+      }
+    }
+    // Fallback: try open anyway
+    try {
+      await Linking.openURL(homes[0]);
+      return {kind: 'opened'};
+    } catch {
+      return {kind: 'no_app'};
+    }
+  }
+
+  return {kind: 'unsupported'};
+}
+
+/**
+ * Legacy auto-fill intent (often blocked by NPCI risk policy for personal VPAs).
+ * Prefer openUpiAppHome + manual pay in the UPI app.
  */
 export async function launchUpiIntent(
   upiUri: string,

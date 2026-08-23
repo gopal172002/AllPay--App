@@ -72,7 +72,7 @@ export const PaymentResultScreen = () => {
             : status === 'USER_CONFIRMED'
               ? 'You confirmed this payment. This is not a UPI app success callback.'
               : status === 'UPI_APP_OPENED'
-                ? 'A UPI app was opened. Finish the payment there, then tap Record manually if it succeeded. iPhone cannot auto-read UPI success like Android.'
+                ? 'UPI ID was copied and your UPI app was opened. Pay there like a normal transfer (do not use auto-fill links — banks block those). Then tap I paid — record expense.'
                 : "We couldn't determine the result of this payment. If you already paid, tap Record manually.";
 
   const toneStyle =

@@ -1,7 +1,15 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import React, {useState} from 'react';
-import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
+import {
+  Alert,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import Clipboard from '@react-native-clipboard/clipboard';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -16,16 +24,11 @@ import {getPolicyWarningFromPolicies} from '../utils/policies';
 import {toast} from '../utils/toast';
 import {trackUpiEvent} from '../upi/analytics';
 import {isSaneAmountPaise, paiseToRupeeLabel, parseRupeeInputToPaise} from '../upi/money';
-import {buildUpiPayUri} from '../upi/scanner/UpiQrParser';
 import {
   detectIosPaymentUpiApps,
   hasCompatibleUpiApp,
-  launchUpiIntent,
+  openUpiAppHome,
 } from '../upi/payment/UpiPaymentLauncher';
-import {
-  mapUpiResultToStatus,
-  parseUpiPaymentResult,
-} from '../upi/payment/UpiPaymentResultParser';
 
 type Route = RouteProp<RootStackParamList, 'Payment'>;
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -38,6 +41,19 @@ const DetailRow = ({label, value}: {label: string; value: string}) => (
     </Text>
   </View>
 );
+
+function appLabelFor(id: string | null | undefined): string {
+  if (id === 'phonepe') {
+    return 'PhonePe';
+  }
+  if (id === 'gpay') {
+    return 'Google Pay';
+  }
+  if (id === 'bhim') {
+    return 'BHIM';
+  }
+  return 'Paytm';
+}
 
 function pickIosUpiApp(
   apps: Array<{id: string; name: string}>,
@@ -58,7 +74,7 @@ function pickIosUpiApp(
       : apps;
     Alert.alert(
       'Pay with',
-      'Choose a UPI app (WhatsApp is not used for expense payments).',
+      'Choose a UPI app. Pay inside that app (same as you do normally).',
       [
         ...ordered.map(app => ({
           text: app.name,
@@ -109,17 +125,8 @@ export const PaymentScreen = () => {
       });
       trackUpiEvent('upi_payment_confirmed');
 
-      const uri = buildUpiPayUri({
-        payeeVpa: merchant.vpa,
-        payeeName: merchant.name,
-        amountPaise: parsedPaise,
-        note: merchant.note,
-        merchantTransactionRef: merchant.qrTransactionRef,
-        merchantCategoryCode: merchant.merchantCategoryCode,
-        baseSanitizedUri: merchant.sanitizedUri,
-      });
-
-      const hasApp = await hasCompatibleUpiApp(uri);
+      const probeUri = `upi://pay?pa=${merchant.vpa}&am=${paiseToRupeeLabel(parsedPaise)}&cu=INR`;
+      const hasApp = await hasCompatibleUpiApp(probeUri);
       if (!hasApp) {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
         toast.error(
@@ -130,13 +137,13 @@ export const PaymentScreen = () => {
         return;
       }
 
-      let preferredAppId = defaultUpiAppId;
+      let preferredAppId = defaultUpiAppId ?? 'paytm';
       if (Platform.OS === 'ios') {
         const iosApps = await detectIosPaymentUpiApps();
         const defaultAvailable =
           defaultUpiAppId && iosApps.some(app => app.id === defaultUpiAppId);
         if (defaultAvailable) {
-          preferredAppId = defaultUpiAppId;
+          preferredAppId = defaultUpiAppId as string;
         } else {
           const chosen = await pickIosUpiApp(iosApps, defaultUpiAppId);
           if (!chosen) {
@@ -149,60 +156,34 @@ export const PaymentScreen = () => {
         }
       }
 
-      const appLabel =
-        preferredAppId === 'paytm'
-          ? 'Paytm'
-          : preferredAppId === 'phonepe'
-            ? 'PhonePe'
-            : preferredAppId === 'gpay'
-              ? 'Google Pay'
-              : preferredAppId === 'bhim'
-                ? 'BHIM'
-                : 'UPI app';
+      const amountLabel = paiseToRupeeLabel(parsedPaise);
+      const appLabel = appLabelFor(preferredAppId);
+
+      // Copy VPA so user can paste in Paytm — same path as direct Paytm pay.
+      try {
+        Clipboard.setString(merchant.vpa);
+      } catch {
+        // clipboard optional
+      }
 
       await markUpiAppOpened(payment.id);
       setStatusMessage(`Opening ${appLabel}…`);
       trackUpiEvent('upi_app_launched');
-      const launch = await launchUpiIntent(uri, {preferredAppId});
 
-      if (launch.kind === 'no_app') {
-        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
-        toast.error(
-          'No UPI app',
-          'Install Google Pay, PhonePe, Paytm, or BHIM, then try again.',
-        );
-      } else if (launch.kind === 'cancelled') {
-        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
-        trackUpiEvent('upi_result_cancelled');
-      } else if (launch.kind === 'unsupported') {
-        await applyUpiPaymentStatus(payment.id, 'UNKNOWN');
-      } else if (launch.kind === 'opened') {
-        // iOS: UPI apps do not return Activity Result. Keep UPI_APP_OPENED
-        // so the user can confirm with "Record manually" after paying.
-        trackUpiEvent('upi_result_unknown');
+      const launch = await openUpiAppHome(preferredAppId);
+      if (launch.kind === 'no_app' || launch.kind === 'unsupported') {
         toast.info(
-          'Complete payment in UPI app',
-          'After you pay, return here and tap Record manually if it succeeded.',
+          'UPI ID copied',
+          `Open ${appLabel} yourself. Pay ₹${amountLabel} to ${merchant.vpa}, then return here.`,
         );
       } else {
-        const parsed = parseUpiPaymentResult(launch.raw);
-        const mapped = mapUpiResultToStatus(parsed, merchant.qrTransactionRef);
-        await applyUpiPaymentStatus(payment.id, mapped, {
-          upiTxnId: parsed.transactionId ?? undefined,
-          upiTxnRef: parsed.transactionReference ?? undefined,
-          approvalRefNo: parsed.approvalReference ?? undefined,
-          upiResponseCode: parsed.responseCode ?? undefined,
-        });
-        if (mapped === 'SUCCESS_REPORTED') {
-          trackUpiEvent('upi_result_success');
-        } else if (mapped === 'FAILED') {
-          trackUpiEvent('upi_result_failed');
-        } else if (mapped === 'PENDING') {
-          trackUpiEvent('upi_result_pending');
-        } else {
-          trackUpiEvent('upi_result_unknown');
-        }
+        toast.success(
+          'UPI ID copied',
+          `In ${appLabel}, pay ₹${amountLabel} to the copied UPI ID, then return here.`,
+        );
       }
+
+      // Stay on result with UPI_APP_OPENED so user can confirm after paying.
       navigation.replace('PaymentResult', {paymentId: payment.id});
     } finally {
       setPaying(false);
@@ -253,11 +234,11 @@ export const PaymentScreen = () => {
     };
 
     Alert.alert(
-      'Before you pay',
-      'End any phone or WhatsApp call first. Banks block UPI with “risk policy” while a call is active — money is not deducted.',
+      'How payment works',
+      'Banks block auto-open UPI links for personal UPI IDs (risk policy). AllPay will copy the UPI ID and open Paytm/PhonePe — you pay there the same way as a normal transfer, then confirm here.',
       [
         {text: 'Cancel', style: 'cancel'},
-        {text: 'I ended calls — Pay', onPress: startPay},
+        {text: 'Continue', onPress: startPay},
       ],
     );
   };
@@ -266,15 +247,15 @@ export const PaymentScreen = () => {
     qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
   const payLabel =
     displayPaise && isSaneAmountPaise(displayPaise)
-      ? `Pay ₹${paiseToRupeeLabel(displayPaise)}`
-      : 'Continue to UPI';
+      ? `Pay ₹${paiseToRupeeLabel(displayPaise)} in UPI app`
+      : 'Continue to UPI app';
 
   return (
     <Screen safeTop={false}>
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader
           title="Confirm Payment"
-          subtitle="Pay the scanned payee in any installed UPI app. Expenzo does not collect this money."
+          subtitle="Pay inside your UPI app (same as a normal transfer). AllPay only tracks the expense."
         />
 
         {statusMessage ? (
@@ -314,9 +295,9 @@ export const PaymentScreen = () => {
         </Section>
 
         <Text style={styles.disclaimer}>
-          End WhatsApp/phone calls before paying. Then choose Paytm, PhonePe, Google
-          Pay, or BHIM. Enter UPI PIN only inside that app. On iPhone, after you
-          return, tap “I paid — record expense”.
+          Auto-fill UPI links are blocked by bank risk policy for personal UPI IDs.
+          AllPay copies the UPI ID and opens your app — pay there, then tap
+          “I paid — record expense”.
         </Text>
 
         <PrimaryButton

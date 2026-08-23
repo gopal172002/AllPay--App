@@ -41,6 +41,11 @@ NativeModules.UpiIntentModule = {
   hasCompatibleApp: jest.fn(async () => true),
 };
 
+jest.mock('@react-native-clipboard/clipboard', () => ({
+  setString: jest.fn(),
+  getString: jest.fn(async () => ''),
+}));
+
 jest.mock('react-native-toast-message', () => {
   const Toast = () => null;
   Toast.show = jest.fn();
