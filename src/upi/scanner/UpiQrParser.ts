@@ -7,6 +7,26 @@ const MAX_TR = 35;
 const MAX_VPA = 255;
 const MAX_URI = 4096;
 
+/** NPCI linking params we may relay from a scanned QR. */
+const QR_RELAY_KEYS = [
+  'pa',
+  'pn',
+  'am',
+  'cu',
+  'tn',
+  'tr',
+  'mc',
+  'tid',
+  'url',
+  'mam',
+  'mode',
+  'orgid',
+  'mid',
+  'msid',
+  'mtid',
+  'sign',
+] as const;
+
 const BLOCKED_SCHEMES = new Set([
   'http',
   'https',
@@ -37,7 +57,6 @@ function normalizeRawPayload(raw: string): string {
     return value.replace(/[.,;)\]]+$/g, '');
   }
 
-  // WhatsApp / chat line with surrounding text before the UPI URI.
   const embeddedUpi = value.match(
     /(?:upi:\/\/pay\?[^\n\r"'<>]+|intent:\/\/pay\?[^\n\r"'<>]+)/i,
   );
@@ -96,26 +115,32 @@ function parseQuery(query: string): Record<string, string> {
 }
 
 function encodeUpiParam(value: string): string {
-  return encodeURIComponent(value).replace(/%20/g, '+');
+  // Prefer %20 over + — matches most bank QR encodings.
+  return encodeURIComponent(value).replace(/\+/g, '%20');
 }
 
 /**
- * Build a UPI pay URI like bank QRs do: keep `@` in `pa` literal.
- * Avoid URLSearchParams — some banks/UPI apps treat over-encoded params as risky.
+ * Build upi://pay URI. Keep VPA `@` literal. Put `sign` last (NPCI requirement).
  */
 function buildSanitizedUri(params: Record<string, string>): string {
   const parts: string[] = [];
-  for (const key of ['pa', 'pn', 'am', 'cu', 'tn', 'tr', 'mc']) {
+  const sign = params.sign;
+  for (const key of QR_RELAY_KEYS) {
+    if (key === 'sign') {
+      continue;
+    }
     const value = params[key];
     if (!value) {
       continue;
     }
-    // Keep VPA `@` unescaped (standard in Indian UPI QRs).
     if (key === 'pa') {
       parts.push(`pa=${value}`);
       continue;
     }
     parts.push(`${key}=${encodeUpiParam(value)}`);
+  }
+  if (sign) {
+    parts.push(`sign=${encodeUpiParam(sign)}`);
   }
   return `upi://pay?${parts.join('&')}`;
 }
@@ -171,6 +196,12 @@ function resultFromParams(params: Record<string, string>): UpiQrParseResult {
   }
   if (mc && mc !== '0000') {
     sanitized.mc = mc;
+  }
+  // Preserve NPCI crypto / merchant fields from QR exactly.
+  for (const key of ['tid', 'url', 'mam', 'mode', 'orgid', 'mid', 'msid', 'mtid', 'sign'] as const) {
+    if (params[key]) {
+      sanitized[key] = params[key];
+    }
   }
 
   return {
@@ -267,10 +298,6 @@ function unwrapIntentUpi(value: string): string | null {
   return `upi:${body.startsWith('//') ? body : `//${body}`}`;
 }
 
-/**
- * Split `upi://pay?...` without `new URL()`.
- * RN/Hermes often parses `upi://pay?pa=user@bank` as host=`bank` or path=`//pay`.
- */
 function splitUpiUri(value: string): {action: string; query: string} | null {
   if (!/^upi:/i.test(value)) {
     return null;
@@ -333,45 +360,83 @@ export function parseUpiQr(raw: string): UpiQrParseResult {
   return resultFromParams(parseQuery(split.query));
 }
 
+function formatAmountPaise(amountPaise: number): string {
+  const rupees = Math.floor(amountPaise / 100);
+  const paise = amountPaise % 100;
+  return `${rupees}.${String(paise).padStart(2, '0')}`;
+}
+
+function amountsEqual(a: string, b: string): boolean {
+  const pa = parseAmountParamToPaise(a);
+  const pb = parseAmountParamToPaise(b);
+  return pa !== null && pb !== null && pa === pb;
+}
+
+/**
+ * Build a launch URI that matches NPCI QR-relay rules:
+ * - Signed QR (has `sign`): never alter params — signature covers the whole string.
+ * - Unsigned QR: relay QR fields; set confirmed amount; never invent mode/orgid/sign.
+ *
+ * Shopping apps succeed because they are registered merchants with signed intents.
+ * AllPay relays the scanned payee QR — same path banks accept for camera scan.
+ */
 export function buildUpiPayUri(input: {
   payeeVpa: string;
   payeeName: string;
   amountPaise: number;
   note?: string;
-  /** Only the QR's own `tr` for registered merchants — never app-generated refs. */
   merchantTransactionRef?: string;
-  /** Only when the scanned QR included `mc`. */
   merchantCategoryCode?: string;
-  /** Prefer the QR's own sanitized URI and only override amount. */
   baseSanitizedUri?: string;
 }): string {
-  const rupees = Math.floor(input.amountPaise / 100);
-  const paise = input.amountPaise % 100;
-  const am = `${rupees}.${String(paise).padStart(2, '0')}`;
-
-  // Intent payments must look like a normal P2P UPI request.
-  // Extra mc/tr/tn from rebuilds can make banks treat the txn as risky merchant collect.
-  // Only keep QR merchant fields when the original QR already had them.
-  const params: Record<string, string> = {
-    pa: input.payeeVpa.trim(),
-    pn: (input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
-    am,
-    cu: 'INR',
-  };
+  const am = formatAmountPaise(input.amountPaise);
 
   if (input.baseSanitizedUri?.toLowerCase().startsWith('upi://pay?')) {
     const split = splitUpiUri(input.baseSanitizedUri);
     if (split?.action === 'pay') {
       const fromQr = parseQuery(split.query);
-      // Keep only safe QR-origin fields; always set amount from confirmed input.
-      if (fromQr.pa) {
-        params.pa = fromQr.pa;
+
+      // NPCI: changing any field invalidates `sign`. Use exact QR when amount matches.
+      if (fromQr.sign) {
+        if (fromQr.am && amountsEqual(fromQr.am, am)) {
+          return input.baseSanitizedUri.trim();
+        }
+        // Signed QR without usable amount — strip crypto fields, rebuild unsigned.
+        const unsigned: Record<string, string> = {
+          pa: fromQr.pa || input.payeeVpa.trim(),
+          pn: (fromQr.pn || input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
+          am,
+          cu: 'INR',
+        };
+        if (fromQr.tn) {
+          unsigned.tn = fromQr.tn.slice(0, MAX_NOTE);
+        }
+        if (fromQr.tr) {
+          unsigned.tr = fromQr.tr.slice(0, MAX_TR);
+        }
+        if (fromQr.mc && fromQr.mc !== '0000') {
+          unsigned.mc = fromQr.mc.slice(0, 4);
+        }
+        if (fromQr.tid) {
+          unsigned.tid = fromQr.tid;
+        }
+        if (fromQr.url) {
+          unsigned.url = fromQr.url;
+        }
+        return buildSanitizedUri(unsigned);
       }
-      if (fromQr.pn) {
-        params.pn = fromQr.pn.slice(0, MAX_NAME);
-      }
+
+      // Unsigned QR relay — keep merchant fields from QR, set confirmed amount.
+      const params: Record<string, string> = {
+        pa: fromQr.pa || input.payeeVpa.trim(),
+        pn: (fromQr.pn || input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
+        am,
+        cu: 'INR',
+      };
       if (fromQr.tn) {
         params.tn = fromQr.tn.slice(0, MAX_NOTE);
+      } else if (input.note?.trim()) {
+        params.tn = input.note.trim().slice(0, MAX_NOTE);
       }
       if (fromQr.tr) {
         params.tr = fromQr.tr.slice(0, MAX_TR);
@@ -379,22 +444,37 @@ export function buildUpiPayUri(input: {
       if (fromQr.mc && fromQr.mc !== '0000') {
         params.mc = fromQr.mc.slice(0, 4);
       }
-    }
-  } else {
-    if (input.note?.trim()) {
-      params.tn = input.note.trim().slice(0, MAX_NOTE);
-    }
-    const qrTr = input.merchantTransactionRef?.trim();
-    if (qrTr) {
-      params.tr = qrTr.slice(0, MAX_TR);
-    }
-    const qrMc = input.merchantCategoryCode?.trim();
-    if (qrMc && qrMc !== '0000') {
-      params.mc = qrMc.slice(0, 4);
+      if (fromQr.tid) {
+        params.tid = fromQr.tid;
+      }
+      if (fromQr.url) {
+        params.url = fromQr.url;
+      }
+      if (fromQr.mam) {
+        params.mam = fromQr.mam;
+      }
+      // Do NOT copy mode/orgid/sign from nowhere — inventing them without a valid
+      // NPCI signature causes PSP apps to reject with risk / tamper errors.
+      return buildSanitizedUri(params);
     }
   }
 
-  params.am = am;
-  params.cu = 'INR';
+  const params: Record<string, string> = {
+    pa: input.payeeVpa.trim(),
+    pn: (input.payeeName.trim() || 'Payee').slice(0, MAX_NAME),
+    am,
+    cu: 'INR',
+  };
+  if (input.note?.trim()) {
+    params.tn = input.note.trim().slice(0, MAX_NOTE);
+  }
+  const qrTr = input.merchantTransactionRef?.trim();
+  if (qrTr) {
+    params.tr = qrTr.slice(0, MAX_TR);
+  }
+  const qrMc = input.merchantCategoryCode?.trim();
+  if (qrMc && qrMc !== '0000') {
+    params.mc = qrMc.slice(0, 4);
+  }
   return buildSanitizedUri(params);
 }

@@ -23,8 +23,7 @@ const IOS_UPI_APP_ORDER = ['paytm', 'phonepe', 'gpay', 'bhim'] as const;
 
 /**
  * Official PSP deep-link prefixes (Juspay / NPCI iOS package list).
- * Paytm MUST be paytmmp://upi/pay — paytmmp://pay is a different (non-UPI) path
- * that often fails after PIN with "UPI risk policy".
+ * Paytm MUST be paytmmp://upi/pay — paytmmp://pay is a different (non-UPI) path.
  */
 const IOS_SCHEME_PREFIX: Record<(typeof IOS_UPI_APP_ORDER)[number], string[]> = {
   paytm: ['paytmmp://upi/pay', 'paytm://upi/pay'],
@@ -48,7 +47,7 @@ export type UpiLaunchResult =
   | {kind: 'unsupported'};
 
 export type UpiLaunchOptions = {
-  /** Preferred app id: paytm | phonepe | gpay | bhim */
+  /** Preferred app id: paytm | phonepe | gpay | bhim (iOS only — Android uses OS chooser). */
   preferredAppId?: string | null;
 };
 
@@ -179,13 +178,7 @@ const ANDROID_PACKAGE: Record<string, string> = {
   bhim: 'in.org.npci.upiapp',
 };
 
-/**
- * Open a UPI app home screen WITHOUT a payment intent URI.
- *
- * NPCI / banks often reject third-party `upi://pay` intents to personal VPAs
- * with "UPI risk policy", while the same payment typed inside Paytm succeeds.
- * Opening the app + letting the user pay normally matches that working path.
- */
+/** Open a UPI app home screen (no payment URI). Used only as a fallback helper. */
 export async function openUpiAppHome(
   appId: string | null | undefined,
 ): Promise<UpiLaunchResult> {
@@ -219,7 +212,6 @@ export async function openUpiAppHome(
         // try next
       }
     }
-    // Fallback: try open anyway
     try {
       await Linking.openURL(homes[0]);
       return {kind: 'opened'};
@@ -232,8 +224,12 @@ export async function openUpiAppHome(
 }
 
 /**
- * Legacy auto-fill intent (often blocked by NPCI risk policy for personal VPAs).
- * Prefer openUpiAppHome + manual pay in the UPI app.
+ * Launch pay-to-payee via NPCI UPI deep link (shopping-style redirect).
+ *
+ * Android: generic `upi://pay?...` ACTION_VIEW + system chooser (NPCI proxy utility).
+ * iOS: app-specific UPI schemes (bare upi:// is often stolen by WhatsApp).
+ *
+ * Never invent mode/orgid/sign — URI must come from buildUpiPayUri / scanned QR.
  */
 export async function launchUpiIntent(
   upiUri: string,
@@ -246,10 +242,9 @@ export async function launchUpiIntent(
   if (Platform.OS !== 'android' || !native?.pay) {
     return {kind: 'unsupported'};
   }
-  const preferred = options?.preferredAppId?.toLowerCase() ?? null;
-  const packageName = preferred ? ANDROID_PACKAGE[preferred] ?? null : null;
   try {
-    const result = await native.pay(upiUri, packageName);
+    // Always null package — native module uses OS chooser for NPCI-compatible initiation.
+    const result = await native.pay(upiUri, null);
     if (result.unsupported) {
       return {kind: 'unsupported'};
     }

@@ -1,15 +1,7 @@
 import {RouteProp, useNavigation, useRoute} from '@react-navigation/native';
 import {NativeStackNavigationProp} from '@react-navigation/native-stack';
 import React, {useState} from 'react';
-import {
-  Alert,
-  Clipboard,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import {Alert, Platform, ScrollView, StyleSheet, Text, View} from 'react-native';
 import {COMPANY_AMOUNT_LIMIT} from '../constants/mockData';
 import {
   FormInput,
@@ -24,11 +16,16 @@ import {getPolicyWarningFromPolicies} from '../utils/policies';
 import {toast} from '../utils/toast';
 import {trackUpiEvent} from '../upi/analytics';
 import {isSaneAmountPaise, paiseToRupeeLabel, parseRupeeInputToPaise} from '../upi/money';
+import {buildUpiPayUri} from '../upi/scanner/UpiQrParser';
 import {
   detectIosPaymentUpiApps,
   hasCompatibleUpiApp,
-  openUpiAppHome,
+  launchUpiIntent,
 } from '../upi/payment/UpiPaymentLauncher';
+import {
+  mapUpiResultToStatus,
+  parseUpiPaymentResult,
+} from '../upi/payment/UpiPaymentResultParser';
 
 type Route = RouteProp<RootStackParamList, 'Payment'>;
 type Nav = NativeStackNavigationProp<RootStackParamList>;
@@ -41,19 +38,6 @@ const DetailRow = ({label, value}: {label: string; value: string}) => (
     </Text>
   </View>
 );
-
-function appLabelFor(id: string | null | undefined): string {
-  if (id === 'phonepe') {
-    return 'PhonePe';
-  }
-  if (id === 'gpay') {
-    return 'Google Pay';
-  }
-  if (id === 'bhim') {
-    return 'BHIM';
-  }
-  return 'Paytm';
-}
 
 function pickIosUpiApp(
   apps: Array<{id: string; name: string}>,
@@ -74,7 +58,7 @@ function pickIosUpiApp(
       : apps;
     Alert.alert(
       'Pay with',
-      'Choose a UPI app. Pay inside that app (same as you do normally).',
+      'Choose a UPI app to complete payment.',
       [
         ...ordered.map(app => ({
           text: app.name,
@@ -125,8 +109,17 @@ export const PaymentScreen = () => {
       });
       trackUpiEvent('upi_payment_confirmed');
 
-      const probeUri = `upi://pay?pa=${merchant.vpa}&am=${paiseToRupeeLabel(parsedPaise)}&cu=INR`;
-      const hasApp = await hasCompatibleUpiApp(probeUri);
+      const uri = buildUpiPayUri({
+        payeeVpa: merchant.vpa,
+        payeeName: merchant.name,
+        amountPaise: parsedPaise,
+        note: merchant.note,
+        merchantTransactionRef: merchant.qrTransactionRef,
+        merchantCategoryCode: merchant.merchantCategoryCode,
+        baseSanitizedUri: merchant.sanitizedUri,
+      });
+
+      const hasApp = await hasCompatibleUpiApp(uri);
       if (!hasApp) {
         await applyUpiPaymentStatus(payment.id, 'CANCELLED');
         toast.error(
@@ -137,13 +130,13 @@ export const PaymentScreen = () => {
         return;
       }
 
-      let preferredAppId = defaultUpiAppId ?? 'paytm';
+      let preferredAppId = defaultUpiAppId;
       if (Platform.OS === 'ios') {
         const iosApps = await detectIosPaymentUpiApps();
         const defaultAvailable =
           defaultUpiAppId && iosApps.some(app => app.id === defaultUpiAppId);
         if (defaultAvailable) {
-          preferredAppId = defaultUpiAppId as string;
+          preferredAppId = defaultUpiAppId;
         } else {
           const chosen = await pickIosUpiApp(iosApps, defaultUpiAppId);
           if (!chosen) {
@@ -156,34 +149,51 @@ export const PaymentScreen = () => {
         }
       }
 
-      const amountLabel = paiseToRupeeLabel(parsedPaise);
-      const appLabel = appLabelFor(preferredAppId);
-
-      // Copy VPA so user can paste in Paytm — same path as direct Paytm pay.
-      try {
-        Clipboard.setString(merchant.vpa);
-      } catch {
-        // clipboard optional
-      }
-
       await markUpiAppOpened(payment.id);
-      setStatusMessage(`Opening ${appLabel}…`);
+      setStatusMessage('Opening UPI app...');
       trackUpiEvent('upi_app_launched');
+      const launch = await launchUpiIntent(uri, {preferredAppId});
 
-      const launch = await openUpiAppHome(preferredAppId);
-      if (launch.kind === 'no_app' || launch.kind === 'unsupported') {
+      if (launch.kind === 'no_app') {
+        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+        toast.error(
+          'No UPI app',
+          'Install Google Pay, PhonePe, Paytm, or BHIM, then try again.',
+        );
+      } else if (launch.kind === 'cancelled') {
+        await applyUpiPaymentStatus(payment.id, 'CANCELLED');
+        trackUpiEvent('upi_result_cancelled');
+      } else if (launch.kind === 'unsupported') {
+        await applyUpiPaymentStatus(payment.id, 'UNKNOWN');
+      } else if (launch.kind === 'opened') {
+        trackUpiEvent('upi_result_unknown');
         toast.info(
-          'UPI ID copied',
-          `Open ${appLabel} yourself. Pay ₹${amountLabel} to ${merchant.vpa}, then return here.`,
+          'Complete payment in UPI app',
+          'After PIN, return here. If the bank blocks the link, tap I paid — record expense only after money is sent.',
         );
       } else {
-        toast.success(
-          'UPI ID copied',
-          `In ${appLabel}, pay ₹${amountLabel} to the copied UPI ID, then return here.`,
-        );
+        const parsed = parseUpiPaymentResult(launch.raw);
+        const mapped = mapUpiResultToStatus(parsed, merchant.qrTransactionRef);
+        await applyUpiPaymentStatus(payment.id, mapped, {
+          upiTxnId: parsed.transactionId ?? undefined,
+          upiTxnRef: parsed.transactionReference ?? undefined,
+          approvalRefNo: parsed.approvalReference ?? undefined,
+          upiResponseCode: parsed.responseCode ?? undefined,
+        });
+        if (mapped === 'SUCCESS_REPORTED') {
+          trackUpiEvent('upi_result_success');
+        } else if (mapped === 'FAILED') {
+          trackUpiEvent('upi_result_failed');
+          toast.error(
+            'UPI app reported failure',
+            'Try Google Pay or PhonePe, or a shop merchant QR. Personal UPI IDs are often blocked by bank risk rules on auto-pay links.',
+          );
+        } else if (mapped === 'PENDING') {
+          trackUpiEvent('upi_result_pending');
+        } else {
+          trackUpiEvent('upi_result_unknown');
+        }
       }
-
-      // Stay on result with UPI_APP_OPENED so user can confirm after paying.
       navigation.replace('PaymentResult', {paymentId: payment.id});
     } finally {
       setPaying(false);
@@ -222,40 +232,29 @@ export const PaymentScreen = () => {
       );
     }
 
-    const startPay = () => {
-      if (warning) {
-        Alert.alert('Policy warning', warning, [
-          {text: 'Cancel', style: 'cancel'},
-          {text: 'Proceed anyway', onPress: () => continuePayment(parsedPaise)},
-        ]);
-        return;
-      }
-      continuePayment(parsedPaise);
-    };
-
-    Alert.alert(
-      'How payment works',
-      'Banks block auto-open UPI links for personal UPI IDs (risk policy). AllPay will copy the UPI ID and open Paytm/PhonePe — you pay there the same way as a normal transfer, then confirm here.',
-      [
+    if (warning) {
+      Alert.alert('Policy warning', warning, [
         {text: 'Cancel', style: 'cancel'},
-        {text: 'Continue', onPress: startPay},
-      ],
-    );
+        {text: 'Proceed anyway', onPress: () => continuePayment(parsedPaise)},
+      ]);
+      return;
+    }
+    await continuePayment(parsedPaise);
   };
 
   const displayPaise =
     qrLockedPaise !== undefined ? qrLockedPaise : parseRupeeInputToPaise(amountText);
   const payLabel =
     displayPaise && isSaneAmountPaise(displayPaise)
-      ? `Pay ₹${paiseToRupeeLabel(displayPaise)} in UPI app`
-      : 'Continue to UPI app';
+      ? `Pay ₹${paiseToRupeeLabel(displayPaise)}`
+      : 'Continue to UPI';
 
   return (
     <Screen safeTop={false}>
       <ScrollView contentContainerStyle={styles.container}>
         <ScreenHeader
           title="Confirm Payment"
-          subtitle="Pay inside your UPI app (same as a normal transfer). AllPay only tracks the expense."
+          subtitle="Opens your UPI app with the scanned payee. PIN is entered only in that app."
         />
 
         {statusMessage ? (
@@ -295,9 +294,10 @@ export const PaymentScreen = () => {
         </Section>
 
         <Text style={styles.disclaimer}>
-          Auto-fill UPI links are blocked by bank risk policy for personal UPI IDs.
-          AllPay copies the UPI ID and opens your app — pay there, then tap
-          “I paid — record expense”.
+          Best success: scan a shop / merchant UPI QR (with merchant code). Personal
+          UPI IDs are often blocked by banks on auto-open links — that is NPCI risk
+          policy, not AllPay PIN handling. On iPhone after pay, confirm with “I paid”
+          if status is unknown.
         </Text>
 
         <PrimaryButton

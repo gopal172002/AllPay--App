@@ -200,4 +200,31 @@ describe('buildUpiPayUri', () => {
     expect(uri).toContain('pa=shop@upi');
     expect(uri).toContain('mc=5812');
   });
+
+  it('returns signed QR unchanged when amount matches', () => {
+    const signed =
+      'upi://pay?pa=shop@upi&pn=Shop&am=2.00&cu=INR&mc=5812&mode=05&orgid=000000&sign=abc123';
+    const uri = buildUpiPayUri({
+      payeeVpa: 'shop@upi',
+      payeeName: 'Shop',
+      amountPaise: 200,
+      baseSanitizedUri: signed,
+    });
+    expect(uri).toBe(signed);
+  });
+
+  it('strips crypto fields when signed QR amount must change', () => {
+    const uri = buildUpiPayUri({
+      payeeVpa: 'shop@upi',
+      payeeName: 'Shop',
+      amountPaise: 300,
+      baseSanitizedUri:
+        'upi://pay?pa=shop@upi&pn=Shop&am=2.00&cu=INR&mc=5812&mode=05&orgid=000000&sign=abc123',
+    });
+    expect(uri).toContain('am=3.00');
+    expect(uri).toContain('mc=5812');
+    expect(uri).not.toContain('sign=');
+    expect(uri).not.toContain('mode=');
+    expect(uri).not.toContain('orgid=');
+  });
 });
